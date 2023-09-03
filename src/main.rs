@@ -1,7 +1,10 @@
 extern crate ocl;
 use eframe::egui;
+use egui::Slider;
+use egui_extras::image::RetainedImage;
+use epaint::ColorImage;
 use ocl::{builders::ProgramBuilder, Buffer, ProQue};
-use std::{fs, path::Path};
+use std::fs;
 
 static OCL_SOURCE: &str = "./src/ocl/mandel.cl";
 
@@ -29,12 +32,13 @@ struct MyApp {
     pro_que: ProQue,
     iters_buff: Buffer<i32>,
     iters_vec: Vec<i32>,
+    rgba_vec: Vec<u8>,
     fparam: FParam,
 }
 
 impl Default for MyApp {
     fn default() -> Self {
-        let imdims = (120, 30);
+        let imdims = (600, 400);
 
         let src =
             fs::read_to_string(OCL_SOURCE).expect(format!("could not load {OCL_SOURCE}").as_str());
@@ -80,6 +84,7 @@ impl Default for MyApp {
             pro_que,
             iters_buff,
             iters_vec: vec![0i32; buff_len],
+            rgba_vec: vec![255; buff_len * 4],
             fparam,
         }
     }
@@ -109,23 +114,73 @@ impl MyApp {
 
         Ok(())
     }
-}
 
-fn main() {
-    let mut myapp = MyApp::default();
-
-    myapp.run_kernel().unwrap();
-
-    // dbg!(iters_vec);
-    let (width, height) = myapp.imdims;
-    for i in 0..height {
-        for j in 0..width {
-            if myapp.iters_vec[i * width + j] > myapp.fparam.max_iter - 5 {
-                print!("*");
-            } else {
-                print!(" ");
+    fn image_from_iters(&mut self) {
+        let (height, width) = self.imdims;
+        for i in 0..height {
+            for j in 0..width {
+                for k in 0..3 {
+                    self.rgba_vec[i * width * 4 + j * 4 + k] =
+                        (255.0f32 * (self.iters_vec[i * width + j] as f32)
+                            / (self.fparam.max_iter as f32)) as u8;
+                }
             }
         }
-        println!();
     }
+}
+
+impl eframe::App for MyApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add(
+                Slider::new(
+                    &mut self.fparam.view_rect.left,
+                    -2f64..=self.fparam.view_rect.right,
+                )
+                .text("left"),
+            );
+            ui.add(
+                Slider::new(
+                    &mut self.fparam.view_rect.right,
+                    self.fparam.view_rect.left..=0.5f64,
+                )
+                .text("right"),
+            );
+            ui.add(
+                Slider::new(
+                    &mut self.fparam.view_rect.bot,
+                    -1f64..=self.fparam.view_rect.top,
+                )
+                .text("bot"),
+            );
+            ui.add(
+                Slider::new(
+                    &mut self.fparam.view_rect.top,
+                    self.fparam.view_rect.bot..=1f64,
+                )
+                .text("top"),
+            );
+
+            self.run_kernel().unwrap();
+            self.image_from_iters();
+            let cimage = ColorImage::from_rgba_unmultiplied(
+                [self.imdims.0, self.imdims.1],
+                self.rgba_vec.as_slice(),
+            );
+            let image = RetainedImage::from_color_image("iters", cimage);
+            image.show(ui);
+        });
+    }
+}
+
+fn main() -> Result<(), eframe::Error> {
+    let options = eframe::NativeOptions {
+        initial_window_size: Some(egui::vec2(800.0, 600.0)),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "Fractal viewer",
+        options,
+        Box::new(|_cc| Box::<MyApp>::default()),
+    )
 }

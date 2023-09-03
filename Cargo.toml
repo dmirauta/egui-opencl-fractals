@@ -8,5 +8,7 @@ edition = "2021"
 [dependencies]
 eframe = "0.22.0"
 egui = "0.22.0"
+egui_extras = "0.22.0"
+epaint = "0.22.0"
 ocl = "0.19.4"
 ocl-core = "0.11.3"
