@@ -15,9 +15,26 @@ struct BBox {
     top: f64,
 }
 
+impl Default for BBox {
+    fn default() -> Self {
+        Self {
+            left: -2.0,
+            right: 0.5,
+            bot: -1.1,
+            top: 1.1,
+        }
+    }
+}
+
 struct Complex {
     re: f64,
     im: f64,
+}
+
+impl Default for Complex {
+    fn default() -> Self {
+        Self { re: 0.0, im: 0.0 }
+    }
 }
 
 struct FParam {
@@ -68,13 +85,8 @@ impl Default for MyApp {
 
         let fparam = FParam {
             mandel: 1,
-            c: Complex { re: 0.0, im: 0.0 },
-            view_rect: BBox {
-                left: -2.0,
-                right: 0.5,
-                bot: -1.1,
-                top: 1.1,
-            },
+            c: Complex::default(),
+            view_rect: BBox::default(),
             max_iter: 1000,
         };
 
