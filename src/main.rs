@@ -1,17 +1,22 @@
 extern crate ocl;
 use eframe::egui;
-use egui::Slider;
 use egui_extras::image::RetainedImage;
+use egui_inspect::EguiInspect;
 use epaint::ColorImage;
 use ocl::{builders::ProgramBuilder, Buffer, ProQue};
 use std::fs;
 
 static OCL_SOURCE: &str = "./src/ocl/mandel.cl";
 
+#[derive(EguiInspect)]
 struct BBox {
+    #[inspect(min=-2.0, max=2.0)]
     left: f64,
+    #[inspect(min=-2.0, max=2.0)]
     right: f64,
+    #[inspect(min=-2.0, max=2.0)]
     bot: f64,
+    #[inspect(min=-2.0, max=2.0)]
     top: f64,
 }
 
@@ -19,41 +24,107 @@ impl Default for BBox {
     fn default() -> Self {
         Self {
             left: -2.0,
-            right: 0.5,
+            right: 2.0,
+            // for mandel
+            // left: -2.0,
+            // right: 0.5,
             bot: -1.1,
             top: 1.1,
         }
     }
 }
 
+#[derive(EguiInspect)]
 struct Complex {
+    #[inspect(min=-2.0, max=2.0)]
     re: f64,
+    #[inspect(min=-2.0, max=2.0)]
     im: f64,
 }
 
 impl Default for Complex {
     fn default() -> Self {
-        Self { re: 0.0, im: 0.0 }
+        Self { re: -0.7, im: 0.3 }
     }
 }
 
+#[derive(Default, EguiInspect)]
 struct FParam {
+    #[inspect(hide)]
     mandel: i32,
+    mandel_mode: bool,
     c: Complex,
     view_rect: BBox,
+    #[inspect(min = 1.0, max = 1000.0)]
     max_iter: i32,
 }
 
-struct MyApp {
-    imdims: (usize, usize),
+impl FParam {
+    fn new() -> Self {
+        Self {
+            mandel: 1,
+            max_iter: 100,
+            ..Default::default()
+        }
+    }
+}
+
+struct ItersImage {
+    dims: (usize, usize),
+    buff: Buffer<i32>,
+    iters: Vec<i32>,
+    rgba: Vec<u8>,
+    max_iter: f32,
+}
+
+impl ItersImage {
+    fn new(dims: (usize, usize), iters_buff: Buffer<i32>) -> Self {
+        let buff_len = iters_buff.len();
+        Self {
+            dims,
+            buff: iters_buff,
+            iters: vec![0i32; buff_len],
+            rgba: vec![255; buff_len * 4],
+            max_iter: 100.0,
+        }
+    }
+
+    fn rgba_from_iters(&mut self) {
+        let (height, width) = self.dims;
+        for i in 0..height {
+            for j in 0..width {
+                for k in 0..3 {
+                    self.rgba[i * width * 4 + j * 4 + k] =
+                        (255.0f32 * (self.iters[i * width + j] as f32) / self.max_iter) as u8;
+                }
+            }
+        }
+    }
+}
+
+impl EguiInspect for ItersImage {
+    fn inspect(&self, _label: &str, _ui: &mut egui::Ui) {
+        todo!()
+    }
+
+    fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
+        // TODO: should only update on FPParams change
+        self.rgba_from_iters();
+        let cimage = ColorImage::from_rgba_unmultiplied(self.dims.into(), self.rgba.as_slice());
+        let image = RetainedImage::from_color_image("iters", cimage);
+        image.show(ui);
+    }
+}
+
+#[derive(EguiInspect)]
+struct FractalViewer {
+    #[inspect(hide)]
     pro_que: ProQue,
-    iters_buff: Buffer<i32>,
-    iters_vec: Vec<i32>,
-    rgba_vec: Vec<u8>,
+    iters_image: ItersImage,
     fparam: FParam,
 }
 
-impl Default for MyApp {
+impl Default for FractalViewer {
     fn default() -> Self {
         let imdims = (600, 400);
 
@@ -83,31 +154,20 @@ impl Default for MyApp {
         //     .arg(&fp_param)
         //     .build()?;
 
-        let fparam = FParam {
-            mandel: 1,
-            c: Complex::default(),
-            view_rect: BBox::default(),
-            max_iter: 1000,
-        };
-
-        let buff_len = iters_buff.len();
         Self {
-            imdims,
             pro_que,
-            iters_buff,
-            iters_vec: vec![0i32; buff_len],
-            rgba_vec: vec![255; buff_len * 4],
-            fparam,
+            iters_image: ItersImage::new(imdims, iters_buff),
+            fparam: FParam::new(),
         }
     }
 }
 
-impl MyApp {
+impl FractalViewer {
     fn run_kernel(&mut self) -> ocl::Result<()> {
         let kernel = self
             .pro_que
             .kernel_builder("escape_iter_args")
-            .arg(&self.iters_buff)
+            .arg(&self.iters_image.buff)
             .arg(self.fparam.view_rect.left)
             .arg(self.fparam.view_rect.right)
             .arg(self.fparam.view_rect.bot)
@@ -122,70 +182,38 @@ impl MyApp {
             kernel.enq()?;
         }
 
-        self.iters_buff.read(&mut self.iters_vec).enq()?;
+        self.iters_image
+            .buff
+            .read(&mut self.iters_image.iters)
+            .enq()?;
 
         Ok(())
     }
-
-    fn image_from_iters(&mut self) {
-        let (height, width) = self.imdims;
-        for i in 0..height {
-            for j in 0..width {
-                for k in 0..3 {
-                    self.rgba_vec[i * width * 4 + j * 4 + k] =
-                        (255.0f32 * (self.iters_vec[i * width + j] as f32)
-                            / (self.fparam.max_iter as f32)) as u8;
-                }
-            }
-        }
-    }
 }
 
-impl eframe::App for MyApp {
+impl eframe::App for FractalViewer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add(
-                Slider::new(
-                    &mut self.fparam.view_rect.left,
-                    -2f64..=self.fparam.view_rect.right,
-                )
-                .text("left"),
-            );
-            ui.add(
-                Slider::new(
-                    &mut self.fparam.view_rect.right,
-                    self.fparam.view_rect.left..=0.5f64,
-                )
-                .text("right"),
-            );
-            ui.add(
-                Slider::new(
-                    &mut self.fparam.view_rect.bot,
-                    -1f64..=self.fparam.view_rect.top,
-                )
-                .text("bot"),
-            );
-            ui.add(
-                Slider::new(
-                    &mut self.fparam.view_rect.top,
-                    self.fparam.view_rect.bot..=1f64,
-                )
-                .text("top"),
-            );
-
             self.run_kernel().unwrap();
-            self.image_from_iters();
-            let cimage = ColorImage::from_rgba_unmultiplied(
-                [self.imdims.0, self.imdims.1],
-                self.rgba_vec.as_slice(),
-            );
-            let image = RetainedImage::from_color_image("iters", cimage);
-            image.show(ui);
+
+            self.fparam
+                .mandel_mode
+                .inspect_mut("mandel mode (else julia)", ui);
+            self.fparam.mandel = self.fparam.mandel_mode as i32;
+            self.iters_image.max_iter = self.fparam.max_iter as f32;
+
+            if !self.fparam.mandel_mode {
+                self.fparam.c.inspect_mut("c", ui);
+            }
+
+            self.fparam.view_rect.inspect_mut("view rect", ui);
+
+            self.iters_image.inspect_mut("Fractal view", ui);
         });
     }
 }
 
-fn main() -> Result<(), eframe::Error> {
+fn main() {
     let options = eframe::NativeOptions {
         initial_window_size: Some(egui::vec2(800.0, 600.0)),
         ..Default::default()
@@ -193,6 +221,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Fractal viewer",
         options,
-        Box::new(|_cc| Box::<MyApp>::default()),
-    )
+        Box::new(|_cc| Box::<FractalViewer>::default()),
+    );
 }
