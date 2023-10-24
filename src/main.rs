@@ -4,7 +4,7 @@ use egui_extras::image::RetainedImage;
 use egui_inspect::EguiInspect;
 use epaint::ColorImage;
 use ocl::{builders::ProgramBuilder, Buffer, ProQue};
-use std::fs;
+use std::{error::Error, fs};
 
 static OCL_SOURCE: &str = "./src/ocl/mandel.cl";
 
@@ -34,7 +34,7 @@ impl Default for BBox {
     }
 }
 
-#[derive(EguiInspect)]
+#[derive(EguiInspect, PartialEq, Clone)]
 struct Complex {
     #[inspect(min=-2.0, max=2.0)]
     re: f64,
@@ -48,12 +48,27 @@ impl Default for Complex {
     }
 }
 
+#[derive(Default, EguiInspect, PartialEq)]
+enum FractalMode {
+    #[default]
+    Mandel,
+    Julia {
+        c: Complex,
+    },
+}
+
+impl FractalMode {
+    fn get_c(&self) -> Complex {
+        match self {
+            FractalMode::Mandel => Complex::default(),
+            FractalMode::Julia { c } => c.clone(),
+        }
+    }
+}
+
 #[derive(Default, EguiInspect)]
 struct FParam {
-    #[inspect(hide)]
-    mandel: i32,
-    mandel_mode: bool,
-    c: Complex,
+    mode: FractalMode,
     view_rect: BBox,
     #[inspect(min = 1.0, max = 1000.0)]
     max_iter: i32,
@@ -62,7 +77,6 @@ struct FParam {
 impl FParam {
     fn new() -> Self {
         Self {
-            mandel: 1,
             max_iter: 100,
             ..Default::default()
         }
@@ -120,8 +134,12 @@ impl EguiInspect for ItersImage {
 struct FractalViewer {
     #[inspect(hide)]
     pro_que: ProQue,
-    iters_image: ItersImage,
     fparam: FParam,
+    #[inspect(hide)]
+    julia_c: Complex,
+    #[inspect(hide)]
+    mode_int: i32,
+    iters_image: ItersImage,
 }
 
 impl Default for FractalViewer {
@@ -158,12 +176,19 @@ impl Default for FractalViewer {
             pro_que,
             iters_image: ItersImage::new(imdims, iters_buff),
             fparam: FParam::new(),
+            julia_c: Default::default(),
+            mode_int: Default::default(),
         }
     }
 }
 
 impl FractalViewer {
     fn run_kernel(&mut self) -> ocl::Result<()> {
+        self.julia_c = self.fparam.mode.get_c();
+        self.mode_int = match self.fparam.mode {
+            FractalMode::Mandel => 1,
+            FractalMode::Julia { .. } => 0,
+        };
         let kernel = self
             .pro_que
             .kernel_builder("escape_iter_args")
@@ -172,9 +197,9 @@ impl FractalViewer {
             .arg(self.fparam.view_rect.right)
             .arg(self.fparam.view_rect.bot)
             .arg(self.fparam.view_rect.top)
-            .arg(self.fparam.c.re)
-            .arg(self.fparam.c.im)
-            .arg(self.fparam.mandel) // mandel
+            .arg(self.julia_c.re)
+            .arg(self.julia_c.im)
+            .arg(self.mode_int) // mandel
             .arg(self.fparam.max_iter)
             .build()?;
 
@@ -196,24 +221,12 @@ impl eframe::App for FractalViewer {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.run_kernel().unwrap();
 
-            self.fparam
-                .mandel_mode
-                .inspect_mut("mandel mode (else julia)", ui);
-            self.fparam.mandel = self.fparam.mandel_mode as i32;
-            self.iters_image.max_iter = self.fparam.max_iter as f32;
-
-            if !self.fparam.mandel_mode {
-                self.fparam.c.inspect_mut("c", ui);
-            }
-
-            self.fparam.view_rect.inspect_mut("view rect", ui);
-
-            self.iters_image.inspect_mut("Fractal view", ui);
+            self.inspect_mut("", ui)
         });
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let options = eframe::NativeOptions {
         initial_window_size: Some(egui::vec2(800.0, 600.0)),
         ..Default::default()
@@ -222,5 +235,6 @@ fn main() {
         "Fractal viewer",
         options,
         Box::new(|_cc| Box::<FractalViewer>::default()),
-    );
+    )?;
+    Ok(())
 }

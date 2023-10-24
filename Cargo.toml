@@ -6,10 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-eframe = "0.20.0"
-egui = "0.20.0"
-egui_extras = "0.20.0"
-epaint = "0.20.0"
+eframe = "0.23.0"
+egui = "0.23.0"
+egui_extras = "0.23.0"
+epaint = "0.23.0"
 ocl = "0.19.4"
 ocl-core = "0.11.3"
-egui_inspect = { git = "https://github.com/Meisterlama/egui_inspect" }
+egui_inspect = { git = "https://github.com/dmirauta/egui_inspect" }
