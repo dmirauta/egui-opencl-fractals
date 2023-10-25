@@ -26,20 +26,6 @@ struct BBox {
     top: f64,
 }
 
-impl Default for BBox {
-    fn default() -> Self {
-        Self {
-            left: -2.0,
-            right: 2.0,
-            // for mandel
-            // left: -2.0,
-            // right: 0.5,
-            bot: -1.1,
-            top: 1.1,
-        }
-    }
-}
-
 // TODO: Could really benefit from logarithmic sliders and variable bounds...
 #[derive(EguiInspect, PartialEq, Clone)]
 struct Complex {
@@ -86,6 +72,8 @@ impl FParam {
     fn new() -> Self {
         Self {
             max_iter: 100,
+            center: Complex { re: -0.4, im: 0.0 },
+            delta: Complex { re: 1.5, im: 1.2 },
             ..Default::default()
         }
     }
