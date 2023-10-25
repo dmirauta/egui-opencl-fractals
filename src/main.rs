@@ -89,9 +89,8 @@ impl FParam {
     }
 }
 
-fn rgba_from_iters(dims: (usize, usize), iters: Vec<i32>, max_iter: i32) -> Vec<u8> {
+fn rgba_from_iters(dims: (usize, usize), iters: &Vec<i32>, rgba: &mut Vec<u8>, max_iter: i32) {
     let (height, width) = dims;
-    let mut rgba = vec![255; width * height * 4];
     for i in 0..height {
         for j in 0..width {
             for k in 0..3 {
@@ -100,24 +99,37 @@ fn rgba_from_iters(dims: (usize, usize), iters: Vec<i32>, max_iter: i32) -> Vec<
             }
         }
     }
-    rgba
 }
 
-fn gen_ret_image(dims: (usize, usize), rgba: Vec<u8>) -> RetainedImage {
+fn gen_ret_image(dims: (usize, usize), rgba: &Vec<u8>) -> RetainedImage {
     let cimage = ColorImage::from_rgba_unmultiplied(dims.into(), rgba.as_slice());
     RetainedImage::from_color_image("iters", cimage)
 }
 
 struct ItersImage {
     dims: (usize, usize),
+    iters: Vec<i32>,
+    rgba: Vec<u8>,
     ret_image: RetainedImage,
 }
 
 impl ItersImage {
     fn new(dims: (usize, usize)) -> Self {
         let buff_len = dims.0 * dims.1;
-        let ret_image = gen_ret_image(dims, vec![255; buff_len * 4]);
-        Self { dims, ret_image }
+        let iters = vec![0; buff_len];
+        let rgba = vec![255; buff_len * 4];
+        let ret_image = gen_ret_image(dims, &rgba);
+        Self {
+            dims,
+            iters,
+            rgba,
+            ret_image,
+        }
+    }
+
+    fn update(&mut self, max_iter: i32) {
+        rgba_from_iters(self.dims, &self.iters, &mut self.rgba, max_iter);
+        self.ret_image = gen_ret_image(self.dims, &self.rgba);
     }
 }
 
@@ -136,7 +148,7 @@ struct CLData {
     buff: Buffer<i32>,
 }
 
-type ThreadResult = Result<Vec<i32>, String>;
+type ThreadResult = Result<(), String>;
 
 #[derive(EguiInspect)]
 struct FractalViewer {
@@ -217,14 +229,29 @@ impl FractalViewer {
                         kernel.enq()?;
                     }
 
-                    // TODO: Could do read back from main thread
-                    let mut new_iters: Vec<i32> = vec![0; guard.buff.len()];
-                    guard.buff.read(&mut new_iters).enq()?;
-                    Ok(new_iters)
+                    Ok(())
                 }
                 Err(_) => Err("mutex is locked".to_string()),
             }
         }));
+    }
+
+    fn collect_result(&mut self) {
+        let handle = self.join_handle.take().unwrap();
+        match handle.join().expect("thread join error") {
+            Ok(_) => match self.cl_data.try_lock() {
+                Ok(guard) => {
+                    guard
+                        .buff
+                        .read(&mut self.iters_image.iters)
+                        .enq()
+                        .expect("readback error");
+                    self.iters_image.update(self.old_fparam.max_iter);
+                }
+                Err(err) => println!("could not aquire mutex in update: {err}"),
+            },
+            Err(err) => println!("Error on other thread: {}", err),
+        }
     }
 }
 
@@ -240,16 +267,10 @@ impl eframe::App for FractalViewer {
         };
 
         if collect_res {
-            let handle = self.join_handle.take().unwrap();
-            let res = handle.join().expect("thread join error");
-            match res {
-                Ok(new_iters) => {
-                    let rgba =
-                        rgba_from_iters(self.iters_image.dims, new_iters, self.fparam.max_iter);
-                    self.iters_image.ret_image = gen_ret_image(self.iters_image.dims, rgba);
-                }
-                Err(err) => println!("Error on other thread: {}", err),
-            }
+            // On main thread, assuming readback is much quicker than computation,
+            // saves having to pass result between threads.
+            // Alternatively an Arc<Mutex<>> could be used on image.iters.
+            self.collect_result();
         }
 
         let mut status_text = RichText::new("GPU Busy").color(Color32::RED);
