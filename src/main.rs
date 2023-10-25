@@ -40,6 +40,7 @@ impl Default for BBox {
     }
 }
 
+// TODO: Could really benefit from logarithmic sliders and variable bounds...
 #[derive(EguiInspect, PartialEq, Clone)]
 struct Complex {
     #[inspect(min=-2.0, max=2.0)]
@@ -75,7 +76,8 @@ impl FractalMode {
 #[derive(Default, EguiInspect, Clone, PartialEq)]
 struct FParam {
     mode: FractalMode,
-    view_rect: BBox,
+    center: Complex,
+    delta: Complex,
     #[inspect(min = 1.0, max = 1000.0)]
     max_iter: i32,
 }
@@ -85,6 +87,15 @@ impl FParam {
         Self {
             max_iter: 100,
             ..Default::default()
+        }
+    }
+
+    fn get_bbox(&self) -> BBox {
+        BBox {
+            left: self.center.re - self.delta.re,
+            right: self.center.re + self.delta.re,
+            bot: self.center.im - self.delta.im,
+            top: self.center.im + self.delta.im,
         }
     }
 }
@@ -211,14 +222,15 @@ impl FractalViewer {
                         FractalMode::Mandel => 1,
                         FractalMode::Julia { .. } => 0,
                     };
+                    let view_rect = fparam.get_bbox();
                     let kernel = guard
                         .pro_que
                         .kernel_builder("escape_iter_args")
                         .arg(&guard.buff)
-                        .arg(fparam.view_rect.left)
-                        .arg(fparam.view_rect.right)
-                        .arg(fparam.view_rect.bot)
-                        .arg(fparam.view_rect.top)
+                        .arg(view_rect.left)
+                        .arg(view_rect.right)
+                        .arg(view_rect.bot)
+                        .arg(view_rect.top)
                         .arg(julia_c.re)
                         .arg(julia_c.im)
                         .arg(mode_int) // mandel
