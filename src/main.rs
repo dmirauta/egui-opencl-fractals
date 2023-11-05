@@ -1,9 +1,8 @@
 extern crate ocl;
 use eframe::egui;
 use egui::RichText;
-use egui_extras::image::RetainedImage;
 use egui_inspect::EguiInspect;
-use epaint::{Color32, ColorImage};
+use epaint::{Color32, ColorImage, TextureHandle};
 use ocl::{builders::ProgramBuilder, Buffer, ProQue};
 use std::{
     error::Error,
@@ -88,47 +87,44 @@ impl FParam {
     }
 }
 
-fn rgba_from_iters(dims: (usize, usize), iters: &Vec<i32>, rgba: &mut Vec<u8>, max_iter: i32) {
+fn rgb_from_iters(dims: (usize, usize), iters: &Vec<i32>, rgb: &mut Vec<u8>, max_iter: i32) {
     let (height, width) = dims;
     for i in 0..height {
         for j in 0..width {
             for k in 0..3 {
-                rgba[i * width * 4 + j * 4 + k] =
+                rgb[i * width * 3 + j * 3 + k] =
                     (255.0f32 * (iters[i * width + j] as f32) / (max_iter as f32)) as u8;
             }
         }
     }
 }
 
-fn gen_ret_image(dims: (usize, usize), rgba: &Vec<u8>) -> RetainedImage {
-    let cimage = ColorImage::from_rgba_unmultiplied(dims.into(), rgba.as_slice());
-    RetainedImage::from_color_image("iters", cimage)
-}
-
 struct ItersImage {
     dims: (usize, usize),
     iters: Vec<i32>,
-    rgba: Vec<u8>,
-    ret_image: RetainedImage,
+    rgb: Vec<u8>,
+    cimage: ColorImage,
+    texture: Option<TextureHandle>,
 }
 
 impl ItersImage {
     fn new(dims: (usize, usize)) -> Self {
         let buff_len = dims.0 * dims.1;
         let iters = vec![0; buff_len];
-        let rgba = vec![255; buff_len * 4];
-        let ret_image = gen_ret_image(dims, &rgba);
+        let rgba = vec![255; buff_len * 3];
         Self {
             dims,
             iters,
-            rgba,
-            ret_image,
+            rgb: rgba,
+            texture: None,
+            cimage: Default::default(),
         }
     }
 
     fn update(&mut self, max_iter: i32) {
-        rgba_from_iters(self.dims, &self.iters, &mut self.rgba, max_iter);
-        self.ret_image = gen_ret_image(self.dims, &self.rgba);
+        rgb_from_iters(self.dims, &self.iters, &mut self.rgb, max_iter);
+        self.cimage = ColorImage::from_rgb(self.dims.into(), self.rgb.as_slice());
+        self.texture = None;
     }
 }
 
@@ -138,7 +134,11 @@ impl EguiInspect for ItersImage {
     }
 
     fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
-        self.ret_image.show(ui);
+        let handle: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
+            ui.ctx()
+                .load_texture("test_img", self.cimage.clone(), Default::default())
+        });
+        ui.image(handle);
     }
 }
 
@@ -161,15 +161,14 @@ struct FractalViewer {
     join_handle: Option<JoinHandle<ThreadResult>>,
 }
 
-impl Default for FractalViewer {
-    fn default() -> Self {
+impl FractalViewer {
+    fn new() -> Self {
         let imdims = (1280, 768);
 
         let src =
             fs::read_to_string(OCL_SOURCE).expect(format!("could not load {OCL_SOURCE}").as_str());
         let mut prog_build = ProgramBuilder::new();
         prog_build.src(src).cmplr_opt("-I./src/ocl");
-        // dbg!(prog_build.get_compiler_options().unwrap());
 
         let pro_que = ProQue::builder()
             .prog_bldr(prog_build)
@@ -180,13 +179,6 @@ impl Default for FractalViewer {
         // automatically sized like workgroup dims
         let buff = pro_que.create_buffer::<i32>().expect("buffer create error");
 
-        // TODO: c_struct params and custom length buffers
-        // let fp_param = Buffer::<CFPParam>::builder()
-        //     .queue(pro_que.queue().clone())
-        //     .len(1)
-        //     .fill_val(Default::default())
-        //     .build();
-
         Self {
             iters_image: ItersImage::new(imdims),
             fparam: FParam::new(),
@@ -195,9 +187,7 @@ impl Default for FractalViewer {
             join_handle: None,
         }
     }
-}
 
-impl FractalViewer {
     fn run_kernel_in_background(&mut self) {
         let cl_data_arc = self.cl_data.clone();
         let fparam = self.fparam.clone();
@@ -257,21 +247,20 @@ impl FractalViewer {
 
 impl eframe::App for FractalViewer {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut collect_res = false;
         let job_still_running = match &mut self.join_handle {
             Some(handle) => {
-                collect_res = handle.is_finished();
-                !collect_res
+                if handle.is_finished() {
+                    // On main thread, assuming readback is much quicker than computation,
+                    // saves having to pass result between threads.
+                    // Alternatively an Arc<Mutex<>> could be used on image.iters.
+                    self.collect_result();
+                    false
+                } else {
+                    true
+                }
             }
             None => false,
         };
-
-        if collect_res {
-            // On main thread, assuming readback is much quicker than computation,
-            // saves having to pass result between threads.
-            // Alternatively an Arc<Mutex<>> could be used on image.iters.
-            self.collect_result();
-        }
 
         let mut status_text = RichText::new("GPU Busy").color(Color32::RED);
         let params_updated = self.old_fparam != self.fparam;
@@ -300,7 +289,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     eframe::run_native(
         "Fractal viewer",
         options,
-        Box::new(|_cc| Box::<FractalViewer>::default()),
+        Box::new(|_cc| Box::new(FractalViewer::new())),
     )?;
     Ok(())
 }
