@@ -24,47 +24,19 @@ __kernel void apply_log_fpn(__global FPN *res_g)
 }
 
 __kernel void escape_iter(__global int *res_g,
-                          __global FParam_t *param)
+                          FParam_t param)
 {
     int i = get_global_id(0);
     int j = get_global_id(1);
     int N = get_global_size(0);
     int M = get_global_size(1);
 
-    Complex_t p = {param->view_rect.left + j*(param->view_rect.right-param->view_rect.left)/M,
-                   param->view_rect.bot  + i*(param->view_rect.top  -param->view_rect.bot )/N};
+    Complex_t p = {param.view_rect.left + j*(param.view_rect.right-param.view_rect.left)/M,
+                   param.view_rect.bot  + i*(param.view_rect.top  -param.view_rect.bot )/N};
 
-    Complex_t _c = param->mandel ? p : param->c;
+    Complex_t _c = param.mandel ? p : param.c;
 
-    res_g[i*M+j] = _escape_iter(p, _c, param->MAXITER);
-}
-
-__kernel void escape_iter_args(__global int *res_g,
-                               FPN left,
-                               FPN right,
-                               FPN bot,
-                               FPN top,
-                               FPN cre,
-                               FPN cim,
-                               int mandel,
-                               int MAXITER)
-{
-    int i = get_global_id(0);
-    int j = get_global_id(1);
-    int N = get_global_size(0);
-    int M = get_global_size(1);
-
-    Box_t view_rect = {left, right, bot, top};
-    Complex_t c = {cre, cim};
-    FParam_t _param = {mandel, c, view_rect, MAXITER};
-    FParam_t *param = &_param;
-
-    Complex_t p = {param->view_rect.left + j*(param->view_rect.right-param->view_rect.left)/M,
-                   param->view_rect.bot  + i*(param->view_rect.top  -param->view_rect.bot )/N};
-
-    Complex_t _c = param->mandel ? p : param->c;
-
-    res_g[i*M+j] = _escape_iter(p, _c, param->MAXITER);
+    res_g[i*M+j] = _escape_iter(p, _c, param.MAXITER);
 }
 
 __kernel void escape_iter_fpn(__global FPN *res_g,

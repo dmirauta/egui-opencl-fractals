@@ -1,9 +1,9 @@
 extern crate ocl;
-use eframe::egui;
+use eframe::NativeOptions;
 use egui::RichText;
 use egui_inspect::EguiInspect;
 use epaint::{Color32, ColorImage, TextureHandle};
-use ocl::{builders::ProgramBuilder, Buffer, ProQue};
+use ocl::{builders::ProgramBuilder, Buffer, OclPrm, Platform, ProQue};
 use std::{
     error::Error,
     fs,
@@ -11,9 +11,8 @@ use std::{
     thread::JoinHandle,
 };
 
-static OCL_SOURCE: &str = "./src/ocl/mandel.cl";
-
-#[derive(EguiInspect, Clone, PartialEq)]
+#[repr(C)]
+#[derive(EguiInspect, Clone, Copy, Debug, Default, PartialEq)]
 struct BBox {
     #[inspect(min=-2.0, max=2.0)]
     left: f64,
@@ -26,7 +25,8 @@ struct BBox {
 }
 
 // TODO: Could really benefit from logarithmic sliders and variable bounds...
-#[derive(EguiInspect, PartialEq, Clone)]
+#[repr(C)]
+#[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
 struct Complex {
     #[inspect(min=-2.0, max=2.0)]
     re: f64,
@@ -58,8 +58,19 @@ impl FractalMode {
     }
 }
 
-#[derive(Default, EguiInspect, Clone, PartialEq)]
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct FParam {
+    mode_int: i32,
+    c: Complex,
+    view: BBox,
+    max_iter: i32,
+}
+
+unsafe impl OclPrm for FParam {}
+
+#[derive(Default, EguiInspect, Clone, PartialEq)]
+struct FParamUI {
     mode: FractalMode,
     center: Complex,
     delta: Complex,
@@ -67,7 +78,7 @@ struct FParam {
     max_iter: i32,
 }
 
-impl FParam {
+impl FParamUI {
     fn new() -> Self {
         Self {
             max_iter: 100,
@@ -83,6 +94,18 @@ impl FParam {
             right: self.center.re + self.delta.re,
             bot: self.center.im - self.delta.im,
             top: self.center.im + self.delta.im,
+        }
+    }
+
+    fn get_c_struct(&self) -> FParam {
+        FParam {
+            mode_int: match self.mode {
+                FractalMode::Mandel => 1,
+                FractalMode::Julia { .. } => 0,
+            },
+            c: self.mode.get_c(),
+            view: self.get_bbox(),
+            max_iter: self.max_iter,
         }
     }
 }
@@ -151,9 +174,9 @@ type ThreadResult = Result<(), String>;
 
 #[derive(EguiInspect)]
 struct FractalViewer {
-    fparam: FParam,
+    fparam: FParamUI,
     #[inspect(hide)]
-    old_fparam: FParam,
+    old_fparam: FParamUI,
     iters_image: ItersImage,
     #[inspect(hide)]
     cl_data: Arc<Mutex<CLData>>,
@@ -165,8 +188,9 @@ impl FractalViewer {
     fn new() -> Self {
         let imdims = (1280, 768);
 
+        let ocl_main = "./src/ocl/mandel.cl";
         let src =
-            fs::read_to_string(OCL_SOURCE).expect(format!("could not load {OCL_SOURCE}").as_str());
+            fs::read_to_string(ocl_main).expect(format!("could not load {ocl_main}").as_str());
         let mut prog_build = ProgramBuilder::new();
         prog_build.src(src).cmplr_opt("-I./src/ocl");
 
@@ -181,8 +205,8 @@ impl FractalViewer {
 
         Self {
             iters_image: ItersImage::new(imdims),
-            fparam: FParam::new(),
-            old_fparam: FParam::default(), // should differ by maxiter
+            fparam: FParamUI::new(),
+            old_fparam: FParamUI::default(), // should differ by maxiter
             cl_data: Arc::new(Mutex::new(CLData { pro_que, buff })),
             join_handle: None,
         }
@@ -192,37 +216,22 @@ impl FractalViewer {
         let cl_data_arc = self.cl_data.clone();
         let fparam = self.fparam.clone();
 
-        self.join_handle = Some(std::thread::spawn(move || {
-            match cl_data_arc.try_lock() {
-                Ok(guard) => {
-                    let julia_c = fparam.mode.get_c();
-                    let mode_int = match fparam.mode {
-                        FractalMode::Mandel => 1,
-                        FractalMode::Julia { .. } => 0,
-                    };
-                    let view_rect = fparam.get_bbox();
-                    let kernel = guard
-                        .pro_que
-                        .kernel_builder("escape_iter_args")
-                        .arg(&guard.buff)
-                        .arg(view_rect.left)
-                        .arg(view_rect.right)
-                        .arg(view_rect.bot)
-                        .arg(view_rect.top)
-                        .arg(julia_c.re)
-                        .arg(julia_c.im)
-                        .arg(mode_int) // mandel
-                        .arg(fparam.max_iter)
-                        .build()?;
+        self.join_handle = Some(std::thread::spawn(move || match cl_data_arc.try_lock() {
+            Ok(guard) => {
+                let kernel = guard
+                    .pro_que
+                    .kernel_builder("escape_iter")
+                    .arg(&guard.buff)
+                    .arg(fparam.get_c_struct())
+                    .build()?;
 
-                    unsafe {
-                        kernel.enq()?;
-                    }
-
-                    Ok(())
+                unsafe {
+                    kernel.enq()?;
                 }
-                Err(_) => Err("mutex is locked".to_string()),
+
+                Ok(())
             }
+            Err(_) => Err("mutex is locked".to_string()),
         }));
     }
 
@@ -282,13 +291,12 @@ impl eframe::App for FractalViewer {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let options = eframe::NativeOptions {
-        initial_window_size: Some(egui::vec2(800.0, 600.0)),
-        ..Default::default()
-    };
+    // Note: Work around to strange segfault issue when building proque in eframe::App
+    dbg!(Platform::default());
+
     eframe::run_native(
         "Fractal viewer",
-        options,
+        NativeOptions::default(),
         Box::new(|_cc| Box::new(FractalViewer::new())),
     )?;
     Ok(())
