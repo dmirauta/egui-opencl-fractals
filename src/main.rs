@@ -3,10 +3,11 @@ use eframe::NativeOptions;
 use egui::RichText;
 use egui_inspect::EguiInspect;
 use epaint::{Color32, ColorImage, TextureHandle};
-use ocl::{builders::ProgramBuilder, Buffer, OclPrm, Platform, ProQue};
+use ndarray::{Array2, Array3};
+use ocl::{OclPrm, Platform, ProQue};
+use simple_ocl::{prog_que_from_source_path, PairedBuffers2};
 use std::{
     error::Error,
-    fs,
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
@@ -110,43 +111,35 @@ impl FParamUI {
     }
 }
 
-fn rgb_from_iters(dims: (usize, usize), iters: &Vec<i32>, rgb: &mut Vec<u8>, max_iter: i32) {
-    let (height, width) = dims;
-    for i in 0..height {
-        for j in 0..width {
-            for k in 0..3 {
-                rgb[i * width * 3 + j * 3 + k] =
-                    (255.0f32 * (iters[i * width + j] as f32) / (max_iter as f32)) as u8;
-            }
-        }
-    }
-}
-
 struct ItersImage {
-    dims: (usize, usize),
-    iters: Vec<i32>,
-    rgb: Vec<u8>,
+    mat_dims: (usize, usize),
+    rgb: Array3<u8>,
     cimage: ColorImage,
     texture: Option<TextureHandle>,
 }
 
 impl ItersImage {
-    fn new(dims: (usize, usize)) -> Self {
-        let buff_len = dims.0 * dims.1;
-        let iters = vec![0; buff_len];
-        let rgba = vec![255; buff_len * 3];
+    fn new(mat_dims: (usize, usize)) -> Self {
         Self {
-            dims,
-            iters,
-            rgb: rgba,
+            mat_dims,
+            rgb: Array3::zeros((mat_dims.0, mat_dims.1, 3)),
             texture: None,
             cimage: Default::default(),
         }
     }
 
-    fn update(&mut self, max_iter: i32) {
-        rgb_from_iters(self.dims, &self.iters, &mut self.rgb, max_iter);
-        self.cimage = ColorImage::from_rgb(self.dims.into(), self.rgb.as_slice());
+    fn update(&mut self, max_iter: i32, iters: &Array2<i32>) {
+        for ((i, j), it) in iters.indexed_iter() {
+            let d = (255.0f32 * (*it as f32) / (max_iter as f32)) as u8;
+            for k in 0..3 {
+                self.rgb[(i, j, k)] = d;
+            }
+        }
+
+        self.cimage = ColorImage::from_rgb(
+            [self.mat_dims.1, self.mat_dims.0],
+            self.rgb.as_slice().unwrap(),
+        );
         self.texture = None;
     }
 }
@@ -165,9 +158,22 @@ impl EguiInspect for ItersImage {
     }
 }
 
-struct CLData {
+struct OCLHelper {
     pro_que: ProQue,
-    buff: Buffer<i32>,
+    buff: PairedBuffers2<i32>,
+}
+
+impl OCLHelper {
+    fn new(im_mat_dims: (usize, usize)) -> Self {
+        let mut pro_que =
+            prog_que_from_source_path("./src/ocl/mandel.cl", vec!["-I./src/ocl".to_string()]);
+        let buff = PairedBuffers2::create_from(Array2::<i32>::zeros(im_mat_dims), &mut pro_que);
+        OCLHelper { pro_que, buff }
+    }
+
+    fn arc_mut_new(im_mat_dims: (usize, usize)) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self::new(im_mat_dims)))
+    }
 }
 
 type ThreadResult = Result<(), String>;
@@ -179,55 +185,44 @@ struct FractalViewer {
     old_fparam: FParamUI,
     iters_image: ItersImage,
     #[inspect(hide)]
-    cl_data: Arc<Mutex<CLData>>,
+    ocl_helper: Arc<Mutex<OCLHelper>>,
     #[inspect(hide)]
     join_handle: Option<JoinHandle<ThreadResult>>,
 }
 
 impl FractalViewer {
     fn new() -> Self {
-        let imdims = (1280, 768);
-
-        let ocl_main = "./src/ocl/mandel.cl";
-        let src =
-            fs::read_to_string(ocl_main).expect(format!("could not load {ocl_main}").as_str());
-        let mut prog_build = ProgramBuilder::new();
-        prog_build.src(src).cmplr_opt("-I./src/ocl");
-
-        let pro_que = ProQue::builder()
-            .prog_bldr(prog_build)
-            .dims((imdims.1, imdims.0)) // workgroup
-            .build()
-            .expect("proque error");
-
-        // automatically sized like workgroup dims
-        let buff = pro_que.create_buffer::<i32>().expect("buffer create error");
+        let im_mat_dims = (768, 1280);
 
         Self {
-            iters_image: ItersImage::new(imdims),
+            iters_image: ItersImage::new(im_mat_dims),
             fparam: FParamUI::new(),
-            old_fparam: FParamUI::default(), // should differ by maxiter
-            cl_data: Arc::new(Mutex::new(CLData { pro_que, buff })),
+            old_fparam: FParamUI::default(), // should differ by maxiter at init
+            ocl_helper: OCLHelper::arc_mut_new(im_mat_dims),
             join_handle: None,
         }
     }
 
     fn run_kernel_in_background(&mut self) {
-        let cl_data_arc = self.cl_data.clone();
+        let cl_data_arc = self.ocl_helper.clone();
         let fparam = self.fparam.clone();
+        let dims = self.iters_image.mat_dims;
 
         self.join_handle = Some(std::thread::spawn(move || match cl_data_arc.try_lock() {
-            Ok(guard) => {
+            Ok(mut guard) => {
+                guard.pro_que.set_dims(dims);
                 let kernel = guard
                     .pro_que
                     .kernel_builder("escape_iter")
-                    .arg(&guard.buff)
+                    .arg(&guard.buff.device)
                     .arg(fparam.get_c_struct())
                     .build()?;
 
                 unsafe {
                     kernel.enq()?;
                 }
+
+                guard.buff.from_device()?;
 
                 Ok(())
             }
@@ -238,14 +233,10 @@ impl FractalViewer {
     fn collect_result(&mut self) {
         let handle = self.join_handle.take().unwrap();
         match handle.join().expect("thread join error") {
-            Ok(_) => match self.cl_data.try_lock() {
+            Ok(_) => match self.ocl_helper.try_lock() {
                 Ok(guard) => {
-                    guard
-                        .buff
-                        .read(&mut self.iters_image.iters)
-                        .enq()
-                        .expect("readback error");
-                    self.iters_image.update(self.old_fparam.max_iter);
+                    self.iters_image
+                        .update(self.old_fparam.max_iter, &guard.buff.host);
                 }
                 Err(err) => println!("could not aquire mutex in update: {err}"),
             },
@@ -259,9 +250,6 @@ impl eframe::App for FractalViewer {
         let job_still_running = match &mut self.join_handle {
             Some(handle) => {
                 if handle.is_finished() {
-                    // On main thread, assuming readback is much quicker than computation,
-                    // saves having to pass result between threads.
-                    // Alternatively an Arc<Mutex<>> could be used on image.iters.
                     self.collect_result();
                     false
                 } else {
