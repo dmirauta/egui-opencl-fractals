@@ -254,8 +254,8 @@ enum FractalVisualisationType {
         field_type: FractalFieldType,
         cmap_freqs: Freqs,
     },
-    DualFieldImageMap,
-    TriFieldRGB,
+    // DualFieldImageMap,
+    // TriFieldRGB,
 }
 
 impl Default for FractalVisualisationType {
@@ -392,8 +392,8 @@ impl FractalViewer {
                         guard.rgb.from_device()?;
                         Ok(())
                     }
-                    FractalVisualisationType::DualFieldImageMap => todo!(),
-                    FractalVisualisationType::TriFieldRGB => todo!(),
+                    // FractalVisualisationType::DualFieldImageMap => todo!(),
+                    // FractalVisualisationType::TriFieldRGB => todo!(),
                 },
                 Err(_) => Err("mutex is locked".to_string()),
             }
