@@ -50,19 +50,19 @@ inline int in_bounds(Complex_t z) {
   return in_circle(z, (Complex_t){FZERO, FZERO}, 2);
 }
 
-FPN proximity(Complex_t z, int PROXTYPE)
+FPN proximity(Complex_t z, ProxType_t PROXTYPE)
 // Various things we can measure distance from...
 {
   FPN res = 1000 * FONE;
-  if (PROXTYPE & 1) {
+  if (PROXTYPE.to_unit_circ) {
     res =
         _min(res, z.re * z.re + z.im * z.im); // normalise to be more in the
                                               // same value range as other two?
   }
-  if (PROXTYPE & 2) {
+  if (PROXTYPE.to_horizontal) {
     res = _min(res, _abs(z.re));
   }
-  if (PROXTYPE & 4) {
+  if (PROXTYPE.to_vertical) {
     res = _min(res, _abs(z.im));
   }
   return res;
@@ -79,7 +79,7 @@ int _escape_iter(Complex_t z, Complex_t c, int MAXITER) {
   return i;
 }
 
-FPN _minprox(Complex_t z, Complex_t c, int MAXITER, int PROXTYPE)
+FPN _minprox(Complex_t z, Complex_t c, int MAXITER, ProxType_t PROXTYPE)
 // more of a distance field?
 {
 

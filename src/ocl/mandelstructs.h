@@ -34,6 +34,12 @@ typedef struct FParam {
   int MAXITER;
 } FParam_t;
 
+typedef struct ProxType {
+  unsigned char to_unit_circ;
+  unsigned char to_horizontal;
+  unsigned char to_vertical;
+} ProxType_t;
+
 typedef struct ImDims {
   int imH;
   int imW;

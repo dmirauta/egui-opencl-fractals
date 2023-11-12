@@ -1,7 +1,7 @@
 extern crate ocl;
 use eframe::NativeOptions;
 use egui::RichText;
-use egui_inspect::EguiInspect;
+use egui_inspect::{EguiInspect, InspectNumber};
 use epaint::{Color32, ColorImage, TextureHandle};
 use ndarray::{Array2, Array3};
 use ocl::{OclPrm, Platform, ProQue};
@@ -25,7 +25,8 @@ struct BBox {
     top: f64,
 }
 
-// TODO: Could really benefit from logarithmic sliders and variable bounds...
+unsafe impl OclPrm for BBox {}
+
 #[repr(C)]
 #[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
 struct Complex {
@@ -44,8 +45,11 @@ impl Default for Complex {
 #[repr(C)]
 #[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
 struct Freqs {
+    #[inspect(log_slider, min = 1.0, max = 1000.0)]
     f1: f64,
+    #[inspect(log_slider, min = 1.0, max = 1000.0)]
     f2: f64,
+    #[inspect(log_slider, min = 1.0, max = 1000.0)]
     f3: f64,
 }
 
@@ -79,55 +83,63 @@ impl FractalMode {
     }
 }
 
+/// Shared fractal params
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct FParam {
+struct SFParam {
     mode_int: i32,
     c: Complex,
     view: BBox,
     max_iter: i32,
 }
 
-unsafe impl OclPrm for FParam {}
+unsafe impl OclPrm for SFParam {}
 
+/// UI for Shared fractal params
 #[derive(EguiInspect, Clone, PartialEq)]
-struct FParamUI {
+struct SFParamUI {
     mode: FractalMode,
     center: Complex,
-    delta: Complex,
-    #[inspect(min = 1.0, max = 1000.0)]
+    #[inspect(log_slider, min = 1e-19, max = 1.0)]
+    zoom: f64,
+    #[inspect(log_slider, min = 0.1, max = 10.0)]
+    aspect: f64,
+    #[inspect(log_slider, min = 1.0, max = 10000.0)]
     max_iter: i32,
 }
 
-impl Default for FParamUI {
+impl Default for SFParamUI {
     fn default() -> Self {
         Self {
             max_iter: 100,
             center: Complex { re: -0.4, im: 0.0 },
-            delta: Complex { re: 1.5, im: 1.2 },
             mode: Default::default(),
+            zoom: 1.0,
+            aspect: 1.0,
         }
     }
 }
 
-impl FParamUI {
-    fn get_bbox(&self) -> BBox {
+impl SFParamUI {
+    fn get_view_bbox(&self) -> BBox {
+        let delta_re = self.zoom;
+        let delta_im = self.zoom * self.aspect;
         BBox {
-            left: self.center.re - self.delta.re,
-            right: self.center.re + self.delta.re,
-            bot: self.center.im - self.delta.im,
-            top: self.center.im + self.delta.im,
+            left: self.center.re - delta_re,
+            right: self.center.re + delta_re,
+            bot: self.center.im - delta_im,
+            top: self.center.im + delta_im,
         }
     }
 
-    fn get_c_struct(&self) -> FParam {
-        FParam {
+    fn get_c_struct(&self) -> SFParam {
+        SFParam {
             mode_int: match self.mode {
                 FractalMode::Mandel => 1,
                 FractalMode::Julia { .. } => 0,
             },
             c: self.mode.get_c(),
-            view: self.get_bbox(),
+            view: self.get_view_bbox(),
             max_iter: self.max_iter,
         }
     }
@@ -192,20 +204,137 @@ impl OCLHelper {
     fn arc_mut_new(im_mat_dims: (usize, usize)) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self::new(im_mat_dims)))
     }
+
+    fn run_escape_iter(&mut self, fparam: SFParam) -> ocl::Result<()> {
+        let kernel = self
+            .pro_que
+            .kernel_builder("escape_iter_fpn")
+            .arg(&self.field_1.device)
+            .arg(fparam)
+            .build()?;
+
+        unsafe {
+            kernel.enq()?;
+        }
+
+        Ok(())
+    }
+
+    fn run_min_prox(&mut self, fparam: SFParam, prox_type: ProxType) -> ocl::Result<()> {
+        let kernel = self
+            .pro_que
+            .kernel_builder("min_prox")
+            .arg(&self.field_1.device)
+            .arg(fparam)
+            .arg(prox_type)
+            .build()?;
+
+        unsafe {
+            kernel.enq()?;
+        }
+
+        Ok(())
+    }
+
+    fn run_box_trap_partial(&mut self, fparam: SFParam, box_: BBox, real: bool) -> ocl::Result<()> {
+        let kernel_name = if real {
+            "orbit_trap_re"
+        } else {
+            "orbit_trap_im"
+        };
+
+        let kernel = self
+            .pro_que
+            .kernel_builder(kernel_name)
+            .arg(&self.field_1.device)
+            .arg(fparam)
+            .arg(box_)
+            .build()?;
+
+        unsafe {
+            kernel.enq()?;
+        }
+
+        Ok(())
+    }
+
+    fn run_map_sines(&mut self, freqs: Freqs) -> ocl::Result<()> {
+        let kernel = self
+            .pro_que
+            .kernel_builder("map_sines")
+            .arg(&self.field_1.device)
+            .arg(&self.rgb.device)
+            .arg(freqs)
+            .build()?;
+
+        unsafe {
+            kernel.enq()?;
+        }
+
+        Ok(())
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default, EguiInspect, PartialEq, Clone, Copy)]
+struct ProxType {
+    to_unit_circ: bool,
+    to_horizontal: bool,
+    to_vertical: bool,
+}
+
+unsafe impl OclPrm for ProxType {}
+
+/// Scalar field selection for visualisation channels
+#[derive(Clone, PartialEq, EguiInspect, Default)]
+enum FractalFieldType {
+    #[default]
+    ItersToEscape,
+    Proximity {
+        prox_type: ProxType,
+    },
+    BoxTrapRe {
+        #[inspect(name = "box")]
+        box_: BBox,
+    },
+    BoxTrapIm {
+        #[inspect(name = "box")]
+        box_: BBox,
+    },
 }
 
 #[derive(Clone, PartialEq, EguiInspect)]
-enum FractalField {
-    ItersToEscape { fparam: FParamUI, freqs: Freqs },
+enum FractalVisualisationType {
+    SingleFieldCmaped {
+        field_type: FractalFieldType,
+        freqs: Freqs,
+    },
+    DualFieldImageMap,
+    TriFieldRGB,
+}
+
+impl Default for FractalVisualisationType {
+    fn default() -> Self {
+        Self::SingleFieldCmaped {
+            field_type: Default::default(),
+            freqs: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Default, PartialEq, EguiInspect)]
+struct FractalParams {
+    sfparam: SFParamUI,
+    fields: FractalVisualisationType,
 }
 
 type ThreadResult = Result<(), String>;
 
 #[derive(EguiInspect)]
 struct FractalViewer {
-    ff: FractalField,
+    fp: FractalParams,
     #[inspect(hide)]
-    old_ff: FractalField,
+    old_fp: FractalParams,
     iters_image: ItersImage,
     #[inspect(hide)]
     ocl_helper: Arc<Mutex<OCLHelper>>,
@@ -216,77 +345,61 @@ struct FractalViewer {
 impl FractalViewer {
     fn new() -> Self {
         let im_mat_dims = (768, 1280);
-        let fparam = FParamUI::default();
-        let mut old_fparam = FParamUI::default();
-        old_fparam.max_iter = 0;
+        let mut old_fp = FractalParams::default();
+        old_fp.sfparam.max_iter = 0;
 
         Self {
             iters_image: ItersImage::new(im_mat_dims),
             ocl_helper: OCLHelper::arc_mut_new(im_mat_dims),
             join_handle: None,
-            ff: FractalField::ItersToEscape {
-                fparam,
-                freqs: Default::default(),
-            },
-            old_ff: FractalField::ItersToEscape {
-                fparam: old_fparam,
-                freqs: Default::default(),
-            },
+            fp: Default::default(),
+            old_fp,
         }
     }
 
     fn run_kernel_in_background(&mut self) {
-        let cl_data_arc = self.ocl_helper.clone();
-        match self.ff.clone() {
-            FractalField::ItersToEscape { fparam, freqs } => {
-                let dims = self.iters_image.mat_dims;
+        let helper_arc = self.ocl_helper.clone();
+        let frac_param = self.fp.clone();
+        let dims = self.iters_image.mat_dims;
 
-                self.join_handle = Some(std::thread::spawn(move || match cl_data_arc.try_lock() {
-                    Ok(mut guard) => {
+        self.join_handle = Some(std::thread::spawn(move || {
+            let FractalParams { sfparam, fields } = frac_param;
+            let sfparam_c = sfparam.get_c_struct();
+            match helper_arc.try_lock() {
+                Ok(mut guard) => match fields {
+                    FractalVisualisationType::SingleFieldCmaped { field_type, freqs } => {
                         guard.pro_que.set_dims(dims);
-
-                        let kernel = guard
-                            .pro_que
-                            .kernel_builder("escape_iter_fpn")
-                            .arg(&guard.field_1.device)
-                            .arg(fparam.get_c_struct())
-                            .build()?;
-
-                        unsafe {
-                            kernel.enq()?;
+                        match field_type {
+                            FractalFieldType::ItersToEscape => {
+                                guard.run_escape_iter(sfparam_c)?;
+                            }
+                            FractalFieldType::Proximity { prox_type } => {
+                                guard.run_min_prox(sfparam_c, prox_type)?;
+                            }
+                            FractalFieldType::BoxTrapRe { box_ } => {
+                                guard.run_box_trap_partial(sfparam_c, box_, true)?;
+                            }
+                            FractalFieldType::BoxTrapIm { box_ } => {
+                                guard.run_box_trap_partial(sfparam_c, box_, false)?;
+                            }
                         }
-
-                        let kernel = guard
-                            .pro_que
-                            .kernel_builder("map_sines")
-                            .arg(&guard.field_1.device)
-                            .arg(&guard.rgb.device)
-                            .arg(freqs)
-                            .build()?;
-
-                        unsafe {
-                            kernel.enq()?;
-                        }
-
+                        guard.run_map_sines(freqs)?;
                         guard.rgb.from_device()?;
-
                         Ok(())
                     }
-                    Err(_) => Err("mutex is locked".to_string()),
-                }));
+                    FractalVisualisationType::DualFieldImageMap => todo!(),
+                    FractalVisualisationType::TriFieldRGB => todo!(),
+                },
+                Err(_) => Err("mutex is locked".to_string()),
             }
-        }
+        }));
     }
 
     fn collect_result(&mut self) {
         let handle = self.join_handle.take().unwrap();
         match handle.join().expect("thread join error") {
             Ok(_) => match self.ocl_helper.try_lock() {
-                Ok(guard) => match &self.old_ff {
-                    FractalField::ItersToEscape { .. } => {
-                        self.iters_image.update(&guard.rgb.host);
-                    }
-                },
+                Ok(guard) => self.iters_image.update(&guard.rgb.host),
                 Err(err) => println!("could not aquire mutex in update: {err}"),
             },
             Err(err) => println!("Error on other thread: {}", err),
@@ -309,11 +422,11 @@ impl eframe::App for FractalViewer {
         };
 
         let mut status_text = RichText::new("GPU Busy").color(Color32::RED);
-        let params_updated = self.old_ff != self.ff;
+        let params_updated = self.old_fp != self.fp;
         if !job_still_running {
             if params_updated {
                 self.run_kernel_in_background();
-                self.old_ff = self.ff.clone();
+                self.old_fp = self.fp.clone();
             } else {
                 status_text = RichText::new("GPU Waiting").color(Color32::GREEN);
             }
