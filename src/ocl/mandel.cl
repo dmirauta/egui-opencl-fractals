@@ -40,19 +40,19 @@ __kernel void escape_iter(__global int *res_g,
 }
 
 __kernel void escape_iter_fpn(__global FPN *res_g,
-                              __global FParam_t *param)
+                              FParam_t param)
 {
     int i = get_global_id(0);
     int j = get_global_id(1);
     int N = get_global_size(0);
     int M = get_global_size(1);
 
-    Complex_t p = {param->view_rect.left + j*(param->view_rect.right-param->view_rect.left)/M,
-                   param->view_rect.bot  + i*(param->view_rect.top  -param->view_rect.bot )/N};
+    Complex_t p = {param.view_rect.left + j*(param.view_rect.right-param.view_rect.left)/M,
+                   param.view_rect.bot  + i*(param.view_rect.top  -param.view_rect.bot )/N};
 
-    Complex_t _c = param->mandel ? p : param->c;
+    Complex_t _c = param.mandel ? p : param.c;
 
-    res_g[i*M+j] = ((FPN) _escape_iter(p, _c, param->MAXITER))/((FPN) param->MAXITER);
+    res_g[i*M+j] = ((FPN) _escape_iter(p, _c, param.MAXITER))/((FPN) param.MAXITER);
 }
 
 __kernel void min_prox(__global FPN *res_g,
@@ -188,16 +188,19 @@ __kernel void pack_norm(__global FPN     *res1_g,
 }
 
 __kernel void map_sines(__global FPN     *res_g,
-                        __global Pixel_t *img_g,
-                        __global Freqs_t *freqs_g)
+                        __global unsigned char *img_g,
+                        Freqs_t freqs)
 {
     int i = get_global_id(0);
     int j = get_global_id(1);
     int N = get_global_size(0);
     int M = get_global_size(1);
 
-    img_g[i*M+j] = (Pixel_t){127*(sin(res_g[i*M+j]*freqs_g->f1)+1), 
-                             127*(sin(res_g[i*M+j]*freqs_g->f2)+1), 
-                             127*(sin(res_g[i*M+j]*freqs_g->f3)+1)};
+    int fi = i*M + j;
+    int pix_idx = fi*3;
+
+    img_g[pix_idx + 0] =127*(sin(res_g[fi]*freqs.f1)+1);
+    img_g[pix_idx + 1] =127*(sin(res_g[fi]*freqs.f2)+1);
+    img_g[pix_idx + 2] =127*(sin(res_g[fi]*freqs.f3)+1);
 
 }

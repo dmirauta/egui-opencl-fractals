@@ -1,5 +1,5 @@
 [package]
-name = "opencl-test"
+name = "egui-opencl-fractals"
 version = "0.1.0"
 edition = "2021"
 
