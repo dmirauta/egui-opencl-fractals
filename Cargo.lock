@@ -949,7 +949,7 @@ dependencies = [
 [[package]]
 name = "egui_inspect"
 version = "0.1.4"
-source = "git+https://github.com/dmirauta/egui_inspect#294e9044903a62cd46a7d32bf0b280db300784ab"
+source = "git+https://github.com/dmirauta/egui_inspect#1e8a5ddbcab8d97af78d8b8d444859231d155373"
 dependencies = [
  "egui",
  "egui_inspect_derive",
@@ -958,7 +958,7 @@ dependencies = [
 [[package]]
 name = "egui_inspect_derive"
 version = "0.1.4"
-source = "git+https://github.com/dmirauta/egui_inspect#294e9044903a62cd46a7d32bf0b280db300784ab"
+source = "git+https://github.com/dmirauta/egui_inspect#1e8a5ddbcab8d97af78d8b8d444859231d155373"
 dependencies = [
  "darling 0.14.4",
  "proc-macro2",

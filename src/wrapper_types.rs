@@ -47,19 +47,19 @@ unsafe impl OclPrm for SFParam {}
 #[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
 pub struct Freqs {
     #[inspect(log_slider, min = 1.0, max = 1000.0)]
-    pub f1: f64,
+    pub r: f64,
     #[inspect(log_slider, min = 1.0, max = 1000.0)]
-    pub f2: f64,
+    pub g: f64,
     #[inspect(log_slider, min = 1.0, max = 1000.0)]
-    pub f3: f64,
+    pub b: f64,
 }
 
 impl Default for Freqs {
     fn default() -> Self {
         Self {
-            f1: 1.1,
-            f2: 3.3,
-            f3: 9.9,
+            r: 1.1,
+            g: 3.3,
+            b: 9.9,
         }
     }
 }
@@ -67,11 +67,21 @@ impl Default for Freqs {
 unsafe impl OclPrm for Freqs {}
 
 #[repr(C)]
-#[derive(Debug, Default, EguiInspect, PartialEq, Clone, Copy)]
+#[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
 pub struct ProxType {
     pub to_unit_circ: bool,
     pub to_horizontal: bool,
     pub to_vertical: bool,
+}
+
+impl Default for ProxType {
+    fn default() -> Self {
+        Self {
+            to_unit_circ: true,
+            to_horizontal: false,
+            to_vertical: false,
+        }
+    }
 }
 
 unsafe impl OclPrm for ProxType {}

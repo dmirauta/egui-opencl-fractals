@@ -37,8 +37,8 @@ impl FractalMode {
 #[derive(EguiInspect, Clone, PartialEq)]
 struct SFParamUI {
     mode: FractalMode,
-    center: Complex,
-    #[inspect(log_slider, min = 1e-19, max = 1.0)]
+    view_center: Complex,
+    #[inspect(log_slider, min = 1e-19, max = 2.0)]
     zoom: f64,
     #[inspect(log_slider, min = 0.1, max = 10.0)]
     aspect: f64,
@@ -50,7 +50,7 @@ impl Default for SFParamUI {
     fn default() -> Self {
         Self {
             max_iter: 100,
-            center: Complex { re: -0.4, im: 0.0 },
+            view_center: Complex { re: -0.4, im: 0.0 },
             mode: Default::default(),
             zoom: 1.0,
             aspect: 1.0,
@@ -63,10 +63,10 @@ impl SFParamUI {
         let delta_re = self.zoom;
         let delta_im = self.zoom * self.aspect;
         BBox {
-            left: self.center.re - delta_re,
-            right: self.center.re + delta_re,
-            bot: self.center.im - delta_im,
-            top: self.center.im + delta_im,
+            left: self.view_center.re - delta_re,
+            right: self.view_center.re + delta_re,
+            bot: self.view_center.im - delta_im,
+            top: self.view_center.im + delta_im,
         }
     }
 
@@ -252,14 +252,17 @@ impl Default for FractalVisualisationType {
 
 #[derive(Clone, Default, PartialEq, EguiInspect)]
 struct FractalParams {
+    #[inspect(name = "Shared")]
     sfparam: SFParamUI,
-    fields: FractalVisualisationType,
+    vis_type: FractalVisualisationType,
 }
 
 type ThreadResult = Result<(), String>;
 
 #[derive(EguiInspect)]
+#[inspect(no_border)]
 struct FractalViewer {
+    #[inspect(name = "Fractal parameters")]
     fp: FractalParams,
     #[inspect(hide)]
     old_fp: FractalParams,
@@ -291,7 +294,10 @@ impl FractalViewer {
         let dims = self.iters_image.mat_dims;
 
         self.join_handle = Some(std::thread::spawn(move || {
-            let FractalParams { sfparam, fields } = frac_param;
+            let FractalParams {
+                sfparam,
+                vis_type: fields,
+            } = frac_param;
             let sfparam_c = sfparam.get_c_struct();
             match helper_arc.try_lock() {
                 Ok(mut guard) => match fields {
