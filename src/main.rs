@@ -4,7 +4,7 @@ use egui::RichText;
 use egui_inspect::{EguiInspect, InspectNumber};
 use epaint::{Color32, ColorImage, TextureHandle};
 use ndarray::{Array2, Array3};
-use ocl::{OclPrm, Platform, ProQue};
+use ocl::{Platform, ProQue};
 use simple_ocl::{prog_que_from_source_path, PairedBuffers2, PairedBuffers3};
 use std::{
     error::Error,
@@ -12,58 +12,8 @@ use std::{
     thread::JoinHandle,
 };
 
-#[repr(C)]
-#[derive(EguiInspect, Clone, Copy, Debug, Default, PartialEq)]
-struct BBox {
-    #[inspect(min=-2.0, max=2.0)]
-    left: f64,
-    #[inspect(min=-2.0, max=2.0)]
-    right: f64,
-    #[inspect(min=-2.0, max=2.0)]
-    bot: f64,
-    #[inspect(min=-2.0, max=2.0)]
-    top: f64,
-}
-
-unsafe impl OclPrm for BBox {}
-
-#[repr(C)]
-#[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
-struct Complex {
-    #[inspect(min=-2.0, max=2.0)]
-    re: f64,
-    #[inspect(min=-2.0, max=2.0)]
-    im: f64,
-}
-
-impl Default for Complex {
-    fn default() -> Self {
-        Self { re: -0.7, im: 0.3 }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
-struct Freqs {
-    #[inspect(log_slider, min = 1.0, max = 1000.0)]
-    f1: f64,
-    #[inspect(log_slider, min = 1.0, max = 1000.0)]
-    f2: f64,
-    #[inspect(log_slider, min = 1.0, max = 1000.0)]
-    f3: f64,
-}
-
-impl Default for Freqs {
-    fn default() -> Self {
-        Self {
-            f1: 1.1,
-            f2: 3.3,
-            f3: 9.9,
-        }
-    }
-}
-
-unsafe impl OclPrm for Freqs {}
+mod wrapper_types;
+use wrapper_types::{BBox, Complex, Freqs, ProxType, SFParam};
 
 #[derive(Default, EguiInspect, PartialEq, Clone)]
 enum FractalMode {
@@ -82,18 +32,6 @@ impl FractalMode {
         }
     }
 }
-
-/// Shared fractal params
-#[repr(C)]
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct SFParam {
-    mode_int: i32,
-    c: Complex,
-    view: BBox,
-    max_iter: i32,
-}
-
-unsafe impl OclPrm for SFParam {}
 
 /// UI for Shared fractal params
 #[derive(EguiInspect, Clone, PartialEq)]
@@ -274,16 +212,6 @@ impl OCLHelper {
         Ok(())
     }
 }
-
-#[repr(C)]
-#[derive(Debug, Default, EguiInspect, PartialEq, Clone, Copy)]
-struct ProxType {
-    to_unit_circ: bool,
-    to_horizontal: bool,
-    to_vertical: bool,
-}
-
-unsafe impl OclPrm for ProxType {}
 
 /// Scalar field selection for visualisation channels
 #[derive(Clone, PartialEq, EguiInspect, Default)]
