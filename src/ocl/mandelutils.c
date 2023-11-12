@@ -30,7 +30,8 @@ Complex_t complex_pow(Complex_t z, int n) {
   return p;
 }
 
-//>> function which we recurse
+// function which we recurse
+//>>
 inline Complex_t f(Complex_t z, Complex_t c) {
   return complex_add(complex_pow(z, 2), c);
 }

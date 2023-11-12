@@ -13,3 +13,4 @@ ocl = "0.19.5"
 egui_inspect = { git = "https://github.com/dmirauta/egui_inspect" }
 simple_ocl = { git = "https://github.com/dmirauta/simple_ocl" }
 ndarray = "0.15.6"
+egui_extras = "0.23.0"
