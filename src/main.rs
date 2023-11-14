@@ -1,9 +1,9 @@
 extern crate ocl;
 use eframe::NativeOptions;
-use egui::{Image, RichText};
+use egui::{DragValue, Image, RichText};
 use egui_extras::syntax_highlighting::{highlight, CodeTheme};
 use egui_inspect::{EguiInspect, InspectNumber};
-use epaint::{Color32, ColorImage, TextureHandle};
+use epaint::{vec2, Color32, ColorImage, TextureHandle};
 use image::{io::Reader, EncodableLayout, ImageResult};
 use ndarray::{Array2, Array3};
 use ocl::{Platform, ProQue};
@@ -471,6 +471,7 @@ impl EguiInspect for FunctionEditor {
                     .desired_rows(10)
                     .lock_focus(true)
                     .desired_width(f32::INFINITY)
+                    .min_size(vec2(300.0, 200.0))
                     .layouter(&mut layouter),
             );
         });
@@ -483,26 +484,31 @@ struct FractalViewer {
     fp: FractalParams,
     old_fp: FractalParams,
     editor: FunctionEditor,
+    size_selection: (usize, usize),
     error: Option<String>,
     iters_image: ItersImage,
     ocl_helper: Arc<Mutex<OCLHelper>>,
     join_handle: Option<JoinHandle<ThreadResult>>,
 }
 
+static INITIAL_IM_MAT_DIMS: (usize, usize) = (768, 1280);
+
 impl FractalViewer {
     fn new() -> Self {
-        let im_mat_dims = (768, 1280);
         let mut old_fp = FractalParams::default();
         old_fp.sfparam.max_iter = 0;
 
         Self {
             editor: Default::default(),
-            iters_image: ItersImage::new(im_mat_dims),
-            ocl_helper: Arc::new(Mutex::new(OCLHelper::new(im_mat_dims, None).unwrap())),
+            iters_image: ItersImage::new(INITIAL_IM_MAT_DIMS),
+            ocl_helper: Arc::new(Mutex::new(
+                OCLHelper::new(INITIAL_IM_MAT_DIMS, None).unwrap(),
+            )),
             join_handle: None,
             fp: Default::default(),
             old_fp,
             error: None,
+            size_selection: INITIAL_IM_MAT_DIMS,
         }
     }
 
@@ -601,9 +607,10 @@ impl FractalViewer {
     fn try_recompile(&mut self) {
         if self.join_handle.is_none() {
             if let Ok(mut guard) = self.ocl_helper.try_lock() {
-                match OCLHelper::new(self.iters_image.mat_dims, Some(self.editor.code.clone())) {
+                match OCLHelper::new(self.size_selection, Some(self.editor.code.clone())) {
                     Ok(new_helper) => {
                         *guard = new_helper;
+                        self.iters_image = ItersImage::new(self.size_selection);
                         self.old_fp.sfparam.max_iter = 0; // trigger recompute
                         self.error = None;
                     }
@@ -646,18 +653,35 @@ impl eframe::App for FractalViewer {
         });
 
         egui::SidePanel::right("Controls").show(ctx, |ui| {
-            ui.label(status_text);
-            ui.collapsing("Custom function", |ui| {
-                self.editor.inspect_mut("Custom function", ui);
-                if ui.button("Recompile").clicked() {
-                    self.try_recompile();
-                }
-                if let Some(err) = &self.error {
-                    ui.label(err.as_str());
-                }
-            });
-            ui.collapsing("Parameters", |ui| {
-                self.fp.inspect_mut("Fractal parameters", ui);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.label(status_text);
+
+                ui.collapsing("Kernel settings", |ui| {
+                    // TODO: custom function requires recompilation but not buffer changes and size
+                    // change requires buffer change but not recompilation. Currently just swapping
+                    // helper for simplicity.
+
+                    ui.label("Custom iteration function:");
+                    self.editor.inspect_mut("Custom function", ui);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Generated image size: ");
+                        ui.add(DragValue::new(&mut self.size_selection.0));
+                        ui.add(DragValue::new(&mut self.size_selection.1));
+                    });
+
+                    if ui.button("Recompile").clicked() {
+                        self.try_recompile();
+                    }
+
+                    if let Some(err) = &self.error {
+                        ui.label(err.as_str());
+                    }
+                });
+
+                ui.collapsing("Parameters", |ui| {
+                    self.fp.inspect_mut("Fractal parameters", ui);
+                });
             });
         });
     }
