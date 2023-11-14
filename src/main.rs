@@ -1,6 +1,6 @@
 extern crate ocl;
 use eframe::NativeOptions;
-use egui::{RichText, Window};
+use egui::{Image, RichText};
 use egui_extras::syntax_highlighting::{highlight, CodeTheme};
 use egui_inspect::{EguiInspect, InspectNumber};
 use epaint::{Color32, ColorImage, TextureHandle};
@@ -118,7 +118,7 @@ impl EguiInspect for ItersImage {
             ui.ctx()
                 .load_texture("fractal", self.cimage.clone(), Default::default())
         });
-        ui.image(handle);
+        ui.add(Image::new(handle).shrink_to_fit());
     }
 }
 
@@ -384,10 +384,8 @@ impl EguiInspect for SelectedImage {
             }
         }
 
-        if let Some(tex) = &self.texture {
-            Window::new("sampled image").show(ui.ctx(), |ui| {
-                ui.image(tex);
-            });
+        if let Some(handle) = &self.texture {
+            ui.add(Image::new(handle).shrink_to_fit());
         }
     }
 }
@@ -644,11 +642,12 @@ impl eframe::App for FractalViewer {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.iters_image.inspect_mut("", ui);
+        });
+
+        egui::SidePanel::right("Controls").show(ctx, |ui| {
             ui.label(status_text);
-            Window::new("Controls").show(ctx, |ui| {
-                self.fp.inspect_mut("Fractal parameters", ui);
-            });
-            Window::new("Custom function").show(ctx, |ui| {
+            ui.collapsing("Custom function", |ui| {
                 self.editor.inspect_mut("Custom function", ui);
                 if ui.button("Recompile").clicked() {
                     self.try_recompile();
@@ -657,7 +656,9 @@ impl eframe::App for FractalViewer {
                     ui.label(err.as_str());
                 }
             });
-            self.iters_image.inspect_mut("", ui);
+            ui.collapsing("Parameters", |ui| {
+                self.fp.inspect_mut("Fractal parameters", ui);
+            });
         });
     }
 }
