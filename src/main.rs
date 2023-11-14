@@ -369,16 +369,13 @@ impl EguiInspect for SelectedImage {
     fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
         if ui.button("load sampled image").clicked() {
             if let Some(fpath) = rfd::FileDialog::new().set_directory(".").pick_file() {
-                let _ = self.path.insert(fpath.clone());
+                self.path = Some(fpath.clone());
                 match load_decoded(fpath) {
                     Ok(img) => {
                         let s = img.shape();
                         let cimage = ColorImage::from_rgb([s[1], s[0]], img.as_slice().unwrap());
-                        let _ = self.texture.insert(ui.ctx().load_texture(
-                            "fractal",
-                            cimage,
-                            Default::default(),
-                        ));
+                        self.texture =
+                            Some(ui.ctx().load_texture("fractal", cimage, Default::default()));
                     }
                     Err(err) => println!("{err}"),
                 }
@@ -386,7 +383,9 @@ impl EguiInspect for SelectedImage {
         }
 
         if let Some(handle) = &self.texture {
-            ui.add(Image::new(handle).shrink_to_fit());
+            let size = handle.size();
+            let aspect = (size[0] as f32) / (size[1] as f32);
+            ui.add(Image::new(handle).fit_to_exact_size(vec2(300.0, aspect * 300.0)));
         }
     }
 }
