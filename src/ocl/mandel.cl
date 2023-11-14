@@ -133,8 +133,8 @@ __kernel void map_img   (__global Complex_t *res_g, // result of orbit trap
     int N = get_global_size(0);
     int M = get_global_size(1);
 
-    int _i = (int) ( ((float) (dims->imH-1)) * res_g[i*M+j].im );
-    int _j = (int) ( ((float) (dims->imW-1)) * res_g[i*M+j].re );
+    int _i = (int) ( ((FPN) (dims->imH-1)) * res_g[i*M+j].im );
+    int _j = (int) ( ((FPN) (dims->imW-1)) * res_g[i*M+j].re );
 
     mim_g[i*M+j] = sim_g[_i*dims->imW + _j];
 
@@ -152,11 +152,66 @@ __kernel void map_img2  (__global FPN     *res1_g,
     int M = get_global_size(1);
 
     // expecting res in [0, 1) range
-    int _i = min((int) ( ((float) dims.imH) * res1_g[i*M+j] ), dims.imH-1);
-    int _j = min((int) ( ((float) dims.imW) * res2_g[i*M+j] ), dims.imW-1);
+    int _i = min((int) ( ((FPN) dims.imH) * res1_g[i*M+j] ), dims.imH-1);
+    int _j = min((int) ( ((FPN) dims.imW) * res2_g[i*M+j] ), dims.imW-1);
 
     mim_g[i*M+j] = sim_g[_i*dims.imW + _j];
 
+}
+
+//      u
+//     <-> ta
+// tl * ___*__ * tr 
+//    |    |   |    |v
+//    |    *   |    
+//    |    |   |
+// bl *____*___* br
+//         ba
+
+inline FPN blinterp_f(FPN tl, FPN tr, 
+                      FPN bl, FPN br, 
+                      FPN u, FPN v) {
+    FPN ui = 1.0-u;
+    FPN vi = 1.0-v;
+    FPN ta = ui*tl + u*tr;
+    FPN ba = ui*bl + u*br;
+    return vi*ta + v*ba;
+}
+
+inline Pixel_t blinterp(Pixel_t tl, Pixel_t tr, 
+                        Pixel_t bl, Pixel_t br, 
+                        FPN u, FPN v) {
+    return (Pixel_t){ blinterp_f(tl.r, tr.r, bl.r, br.r, u, v),
+                      blinterp_f(tl.g, tr.g, bl.g, br.g, u, v),
+                      blinterp_f(tl.b, tr.b, bl.b, br.b, u, v) };
+}
+
+__kernel void map_img3  (__global FPN     *res1_g,
+                         __global FPN     *res2_g,
+                         __global Pixel_t   *sim_g, // sample image
+                         __global Pixel_t   *mim_g, // mapped image
+                         ImDims_t  dims)
+{
+    int i = get_global_id(0);
+    int j = get_global_id(1);
+    int N = get_global_size(0);
+    int M = get_global_size(1);
+
+    FPN fH = dims.imH;
+    FPN fW = dims.imW;
+
+    // expecting res in [0, 1) range
+    FPN fi = fH * res1_g[i*M+j];
+    FPN fj = fW * res2_g[i*M+j];
+    fi = min(fi, fH - 2.0);
+    fj = min(fj, fW - 2.0);
+    // discard fractional part
+    int _i = fi;
+    int _j = fj;
+
+    mim_g[i*M+j] = blinterp(sim_g[    _i*dims.imW + _j], sim_g[    _i*dims.imW + _j+1],
+                            sim_g[(_i+1)*dims.imW + _j], sim_g[(_i+1)*dims.imW + _j+1],
+                            fi - _i, fj - _j);
 }
 
 __kernel void pack (__global FPN     *res1_g,

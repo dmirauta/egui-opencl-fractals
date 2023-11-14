@@ -288,16 +288,17 @@ impl OCLHelper {
         Ok(())
     }
 
-    fn run_map_img(&mut self) -> ocl::Result<()> {
+    fn run_map_img(&mut self, bilinear: bool) -> ocl::Result<()> {
         if let Some(sampled) = self.sampled_rgb.as_ref() {
             let s = sampled.host.shape();
             let imdims = ImDims {
                 height: s[0] as i32,
                 width: s[1] as i32,
             };
+            let kernel_name = if bilinear { "map_img3" } else { "map_img2" };
             let kernel = self
                 .pro_que
-                .kernel_builder("map_img2")
+                .kernel_builder(kernel_name)
                 .arg(&self.field_1.device)
                 .arg(&self.field_2.device)
                 .arg(&sampled.device)
@@ -400,6 +401,7 @@ enum FractalVisualisationType {
         u_field_type: FractalFieldType,
         v_field_type: FractalFieldType,
         selected_image: SelectedImage,
+        bilinear_interp: bool,
     },
     TriFieldRGB {
         r_field_type: FractalFieldType,
@@ -419,6 +421,7 @@ impl Default for FractalVisualisationType {
 }
 
 #[derive(Clone, Default, PartialEq, EguiInspect)]
+#[inspect(collapsible, no_border)]
 struct FractalParams {
     #[inspect(name = "Shared")]
     sfparam: SFParamUI,
@@ -558,6 +561,7 @@ impl FractalViewer {
                             u_field_type,
                             v_field_type,
                             selected_image,
+                            bilinear_interp,
                         } => {
                             if guard.sampled_path != selected_image.path {
                                 if let Some(ip) = &selected_image.path {
@@ -569,8 +573,8 @@ impl FractalViewer {
                             if guard.sampled_rgb.is_some() {
                                 Self::handle_field(1, &mut guard, u_field_type, sfparam_c)?;
                                 Self::handle_field(2, &mut guard, v_field_type, sfparam_c)?;
-                                // TODO: not all field types normalised for UV coords
-                                guard.run_map_img()?;
+                                // TODO: prox field not normalised for UV coords
+                                guard.run_map_img(bilinear_interp)?;
                             }
                         }
                         FractalVisualisationType::TriFieldRGB {
@@ -666,17 +670,17 @@ impl eframe::App for FractalViewer {
         });
 
         egui::SidePanel::right("Controls").show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.label(status_text);
+            ui.label(status_text);
 
-                if ui.button("Save image").clicked() {
-                    if let Some(fpath) = rfd::FileDialog::new().set_directory(".").save_file() {
-                        if let Err(err) = self.save_image(fpath) {
-                            println!("{err}");
-                        };
+            if ui.button("Save image").clicked() {
+                if let Some(fpath) = rfd::FileDialog::new().set_directory(".").save_file() {
+                    if let Err(err) = self.save_image(fpath) {
+                        println!("{err}");
                     };
                 };
+            };
 
+            egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.collapsing("Kernel settings", |ui| {
                     // TODO: custom function requires recompilation but not buffer changes and size
                     // change requires buffer change but not recompilation. Currently just swapping
@@ -700,9 +704,7 @@ impl eframe::App for FractalViewer {
                     }
                 });
 
-                ui.collapsing("Parameters", |ui| {
-                    self.fp.inspect_mut("Fractal parameters", ui);
-                });
+                self.fp.inspect_mut("Fractal parameters", ui);
             });
         });
     }
