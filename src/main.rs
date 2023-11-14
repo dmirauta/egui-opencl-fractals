@@ -1,20 +1,22 @@
 extern crate ocl;
 use eframe::NativeOptions;
-use egui::RichText;
+use egui::{RichText, Window};
 use egui_extras::syntax_highlighting::{highlight, CodeTheme};
 use egui_inspect::{EguiInspect, InspectNumber};
 use epaint::{Color32, ColorImage, TextureHandle};
+use image::{io::Reader, EncodableLayout, ImageResult};
 use ndarray::{Array2, Array3};
 use ocl::{Platform, ProQue};
 use simple_ocl::{try_prog_que_from_source, PairedBuffers2, PairedBuffers3};
 use std::{
     error::Error,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
 
 mod wrapper_types;
-use wrapper_types::{BBox, Complex, Freqs, ProxType, SFParam};
+use wrapper_types::{BBox, Complex, Freqs, ImDims, ProxType, SFParam};
 
 #[derive(Default, EguiInspect, PartialEq, Clone)]
 enum FractalMode {
@@ -114,7 +116,7 @@ impl EguiInspect for ItersImage {
     fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
         let handle: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
             ui.ctx()
-                .load_texture("test_img", self.cimage.clone(), Default::default())
+                .load_texture("fractal", self.cimage.clone(), Default::default())
         });
         ui.image(handle);
     }
@@ -138,6 +140,10 @@ fn insert_custom_func(custom_func: String) -> String {
 struct OCLHelper {
     pro_que: ProQue,
     field_1: PairedBuffers2<f64>,
+    field_2: PairedBuffers2<f64>,
+    field_3: PairedBuffers2<f64>,
+    sampled_path: Option<PathBuf>,
+    sampled_rgb: Option<PairedBuffers3<u8>>,
     rgb: PairedBuffers3<u8>,
 }
 
@@ -151,20 +157,49 @@ impl OCLHelper {
         let mut pro_que =
             try_prog_que_from_source(full_source, "mandel", vec!["-DEXTERNAL_CONCAT".to_string()])?;
         let field_1 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_mat_dims), &mut pro_que);
+        let field_2 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_mat_dims), &mut pro_que);
+        let field_3 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_mat_dims), &mut pro_que);
         let (n, m) = im_mat_dims;
         let rgb = PairedBuffers3::create_from(Array3::<u8>::zeros((n, m, 3)), &mut pro_que);
         Ok(OCLHelper {
             pro_que,
             field_1,
+            field_2,
+            field_3,
             rgb,
+            sampled_path: None,
+            sampled_rgb: None,
         })
     }
 
-    fn run_escape_iter(&mut self, fparam: SFParam) -> ocl::Result<()> {
+    fn update_sampled(&mut self, ip: PathBuf) {
+        match load_decoded(&ip) {
+            Ok(sampled) => {
+                let pb = PairedBuffers3::create_from(sampled, &mut self.pro_que);
+                pb.to_device().unwrap();
+                self.sampled_rgb = Some(pb);
+                self.sampled_path = Some(ip);
+            }
+            Err(err) => println!("{err}"),
+        }
+    }
+
+    fn field_ref(&self, i: usize) -> &ocl::Buffer<f64> {
+        match i {
+            1 => &self.field_1.device,
+            2 => &self.field_2.device,
+            3 => &self.field_3.device,
+            _ => {
+                panic!("invalid field index");
+            }
+        }
+    }
+
+    fn run_escape_iter(&mut self, fi: usize, fparam: SFParam) -> ocl::Result<()> {
         let kernel = self
             .pro_que
             .kernel_builder("escape_iter_fpn")
-            .arg(&self.field_1.device)
+            .arg(self.field_ref(fi))
             .arg(fparam)
             .build()?;
 
@@ -175,11 +210,11 @@ impl OCLHelper {
         Ok(())
     }
 
-    fn run_min_prox(&mut self, fparam: SFParam, prox_type: ProxType) -> ocl::Result<()> {
+    fn run_min_prox(&mut self, fi: usize, fparam: SFParam, prox_type: ProxType) -> ocl::Result<()> {
         let kernel = self
             .pro_que
             .kernel_builder("min_prox")
-            .arg(&self.field_1.device)
+            .arg(self.field_ref(fi))
             .arg(fparam)
             .arg(prox_type)
             .build()?;
@@ -191,7 +226,13 @@ impl OCLHelper {
         Ok(())
     }
 
-    fn run_box_trap_partial(&mut self, fparam: SFParam, box_: BBox, real: bool) -> ocl::Result<()> {
+    fn run_box_trap_partial(
+        &mut self,
+        fi: usize,
+        fparam: SFParam,
+        box_: BBox,
+        real: bool,
+    ) -> ocl::Result<()> {
         let kernel_name = if real {
             "orbit_trap_re"
         } else {
@@ -201,7 +242,7 @@ impl OCLHelper {
         let kernel = self
             .pro_que
             .kernel_builder(kernel_name)
-            .arg(&self.field_1.device)
+            .arg(self.field_ref(fi))
             .arg(fparam)
             .arg(box_)
             .build()?;
@@ -228,6 +269,49 @@ impl OCLHelper {
 
         Ok(())
     }
+
+    fn run_pack(&mut self, normalise: bool) -> ocl::Result<()> {
+        let kernel_name = if normalise { "pack_norm" } else { "pack" };
+        let kernel = self
+            .pro_que
+            .kernel_builder(kernel_name)
+            .arg(&self.field_1.device)
+            .arg(&self.field_2.device)
+            .arg(&self.field_3.device)
+            .arg(&self.rgb.device)
+            .build()?;
+
+        unsafe {
+            kernel.enq()?;
+        }
+
+        Ok(())
+    }
+
+    fn run_map_img(&mut self) -> ocl::Result<()> {
+        if let Some(sampled) = self.sampled_rgb.as_ref() {
+            let s = sampled.host.shape();
+            let imdims = ImDims {
+                height: s[0] as i32,
+                width: s[1] as i32,
+            };
+            let kernel = self
+                .pro_que
+                .kernel_builder("map_img2")
+                .arg(&self.field_1.device)
+                .arg(&self.field_2.device)
+                .arg(&sampled.device)
+                .arg(&self.rgb.device)
+                .arg(imdims)
+                .build()?;
+
+            unsafe {
+                kernel.enq()?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Scalar field selection for visualisation channels
@@ -248,14 +332,83 @@ enum FractalFieldType {
     },
 }
 
+fn load_decoded(fpath: impl AsRef<Path>) -> ImageResult<Array3<u8>> {
+    let img = Reader::open(fpath)?
+        .with_guessed_format()?
+        .decode()?
+        .into_rgb8();
+    let (w, h) = img.dimensions();
+    let h = h as usize;
+    let w = w as usize;
+    let mut sampled = Array3::<u8>::zeros((h, w, 3));
+    sampled
+        .as_slice_mut()
+        .unwrap()
+        .copy_from_slice(img.as_bytes());
+    Ok(sampled)
+}
+
+#[derive(Clone, Default)]
+struct SelectedImage {
+    path: Option<PathBuf>,
+    texture: Option<TextureHandle>,
+}
+
+impl PartialEq for SelectedImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+impl EguiInspect for SelectedImage {
+    fn inspect(&self, _label: &str, _ui: &mut egui::Ui) {
+        todo!()
+    }
+
+    fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
+        if ui.button("load sampled image").clicked() {
+            if let Some(fpath) = rfd::FileDialog::new().set_directory(".").pick_file() {
+                let _ = self.path.insert(fpath.clone());
+                match load_decoded(fpath) {
+                    Ok(img) => {
+                        let s = img.shape();
+                        let cimage = ColorImage::from_rgb([s[1], s[0]], img.as_slice().unwrap());
+                        let _ = self.texture.insert(ui.ctx().load_texture(
+                            "fractal",
+                            cimage,
+                            Default::default(),
+                        ));
+                    }
+                    Err(err) => println!("{err}"),
+                }
+            }
+        }
+
+        if let Some(tex) = &self.texture {
+            Window::new("sampled image").show(ui.ctx(), |ui| {
+                ui.image(tex);
+            });
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, EguiInspect)]
 enum FractalVisualisationType {
     SingleFieldCmaped {
         field_type: FractalFieldType,
         cmap_freqs: Freqs,
     },
-    // DualFieldImageMap,
-    // TriFieldRGB,
+    DualFieldImageMap {
+        u_field_type: FractalFieldType,
+        v_field_type: FractalFieldType,
+        selected_image: SelectedImage,
+    },
+    TriFieldRGB {
+        r_field_type: FractalFieldType,
+        g_field_type: FractalFieldType,
+        b_field_type: FractalFieldType,
+        normalise_colors: bool,
+    },
 }
 
 impl Default for FractalVisualisationType {
@@ -305,7 +458,7 @@ impl EguiInspect for FunctionEditor {
         todo!()
     }
 
-    fn inspect_mut(&mut self, label: &str, ui: &mut egui::Ui) {
+    fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
         let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
             let mut layout_job = highlight(ui.ctx(), &self.theme, string, "c");
             layout_job.wrap.max_width = wrap_width;
@@ -313,7 +466,6 @@ impl EguiInspect for FunctionEditor {
         };
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(label);
             ui.add(
                 egui::TextEdit::multiline(&mut self.code)
                     .font(egui::TextStyle::Monospace) // for cursor height
@@ -356,45 +508,82 @@ impl FractalViewer {
         }
     }
 
+    fn handle_field(
+        fi: usize,
+        helper: &mut OCLHelper,
+        field_type: FractalFieldType,
+        sfparam_c: SFParam,
+    ) -> ocl::Result<()> {
+        match field_type {
+            FractalFieldType::ItersToEscape => {
+                helper.run_escape_iter(fi, sfparam_c)?;
+            }
+            FractalFieldType::ChainMinProximity { prox_type } => {
+                helper.run_min_prox(fi, sfparam_c, prox_type)?;
+            }
+            FractalFieldType::BoxTrapRe { box_ } => {
+                helper.run_box_trap_partial(fi, sfparam_c, box_, true)?;
+            }
+            FractalFieldType::BoxTrapIm { box_ } => {
+                helper.run_box_trap_partial(fi, sfparam_c, box_, false)?;
+            }
+        }
+        Ok(())
+    }
+
     fn run_kernel_in_background(&mut self) {
         let helper_arc = self.ocl_helper.clone();
         let frac_param = self.fp.clone();
         let dims = self.iters_image.mat_dims;
 
         self.join_handle = Some(std::thread::spawn(move || {
-            let FractalParams {
-                sfparam,
-                vis_type: fields,
-            } = frac_param;
+            let FractalParams { sfparam, vis_type } = frac_param;
             let sfparam_c = sfparam.get_c_struct();
             match helper_arc.try_lock() {
-                Ok(mut guard) => match fields {
-                    FractalVisualisationType::SingleFieldCmaped {
-                        field_type,
-                        cmap_freqs: freqs,
-                    } => {
-                        guard.pro_que.set_dims(dims);
-                        match field_type {
-                            FractalFieldType::ItersToEscape => {
-                                guard.run_escape_iter(sfparam_c)?;
-                            }
-                            FractalFieldType::ChainMinProximity { prox_type } => {
-                                guard.run_min_prox(sfparam_c, prox_type)?;
-                            }
-                            FractalFieldType::BoxTrapRe { box_ } => {
-                                guard.run_box_trap_partial(sfparam_c, box_, true)?;
-                            }
-                            FractalFieldType::BoxTrapIm { box_ } => {
-                                guard.run_box_trap_partial(sfparam_c, box_, false)?;
+                Ok(mut guard) => {
+                    guard.pro_que.set_dims(dims);
+                    match vis_type {
+                        FractalVisualisationType::SingleFieldCmaped {
+                            field_type,
+                            cmap_freqs: freqs,
+                        } => {
+                            Self::handle_field(1, &mut guard, field_type, sfparam_c)?;
+                            guard.run_map_sines(freqs)?;
+                        }
+                        FractalVisualisationType::DualFieldImageMap {
+                            u_field_type,
+                            v_field_type,
+                            selected_image,
+                        } => {
+                            if guard.sampled_path != selected_image.path {
+                                if let Some(ip) = &selected_image.path {
+                                    guard.update_sampled(ip.clone());
+                                    // update_sampled changes que size
+                                    guard.pro_que.set_dims(dims);
+                                }
+                            };
+                            if guard.sampled_rgb.is_some() {
+                                Self::handle_field(1, &mut guard, u_field_type, sfparam_c)?;
+                                Self::handle_field(2, &mut guard, v_field_type, sfparam_c)?;
+                                // TODO: not all field types normalised for UV coords
+                                guard.run_map_img()?;
                             }
                         }
-                        guard.run_map_sines(freqs)?;
-                        guard.rgb.from_device()?;
-                        Ok(())
-                    }
-                    // FractalVisualisationType::DualFieldImageMap => todo!(),
-                    // FractalVisualisationType::TriFieldRGB => todo!(),
-                },
+                        FractalVisualisationType::TriFieldRGB {
+                            r_field_type,
+                            g_field_type,
+                            b_field_type,
+                            normalise_colors,
+                        } => {
+                            Self::handle_field(1, &mut guard, r_field_type, sfparam_c)?;
+                            Self::handle_field(2, &mut guard, g_field_type, sfparam_c)?;
+                            Self::handle_field(3, &mut guard, b_field_type, sfparam_c)?;
+                            guard.run_pack(normalise_colors)?;
+                        }
+                    };
+                    guard.rgb.from_device()?;
+                    Ok(())
+                }
                 Err(_) => Err("mutex is locked".to_string()),
             }
         }));
@@ -455,20 +644,20 @@ impl eframe::App for FractalViewer {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.columns(2, |columns| {
-                columns[0].label(status_text);
-
-                self.fp.inspect_mut("Fractal parameters", &mut columns[0]);
-                self.iters_image.inspect_mut("", &mut columns[0]);
-
-                self.editor.inspect_mut("Custom function", &mut columns[1]);
-                if columns[1].button("Recompile").clicked() {
+            ui.label(status_text);
+            Window::new("Controls").show(ctx, |ui| {
+                self.fp.inspect_mut("Fractal parameters", ui);
+            });
+            Window::new("Custom function").show(ctx, |ui| {
+                self.editor.inspect_mut("Custom function", ui);
+                if ui.button("Recompile").clicked() {
                     self.try_recompile();
                 }
                 if let Some(err) = &self.error {
-                    columns[1].label(err.as_str());
+                    ui.label(err.as_str());
                 }
             });
+            self.iters_image.inspect_mut("", ui);
         });
     }
 }

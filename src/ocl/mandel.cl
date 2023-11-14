@@ -144,17 +144,18 @@ __kernel void map_img2  (__global FPN     *res1_g,
                          __global FPN     *res2_g,
                          __global Pixel_t   *sim_g, // sample image
                          __global Pixel_t   *mim_g, // mapped image
-                         __global ImDims_t  *dims)
+                         ImDims_t  dims)
 {
     int i = get_global_id(0);
     int j = get_global_id(1);
     int N = get_global_size(0);
     int M = get_global_size(1);
 
-    int _i = (int) ( ((float) (dims->imH-1)) * res1_g[i*M+j] );
-    int _j = (int) ( ((float) (dims->imW-1)) * res2_g[i*M+j] );
+    // expecting res in [0, 1) range
+    int _i = min((int) ( ((float) dims.imH) * res1_g[i*M+j] ), dims.imH-1);
+    int _j = min((int) ( ((float) dims.imW) * res2_g[i*M+j] ), dims.imW-1);
 
-    mim_g[i*M+j] = sim_g[_i*dims->imW + _j];
+    mim_g[i*M+j] = sim_g[_i*dims.imW + _j];
 
 }
 
@@ -188,7 +189,7 @@ __kernel void pack_norm(__global FPN     *res1_g,
 }
 
 __kernel void map_sines(__global FPN     *res_g,
-                        __global unsigned char *img_g,
+                        __global Pixel_t *img_g,
                         Freqs_t freqs)
 {
     int i = get_global_id(0);
@@ -197,10 +198,9 @@ __kernel void map_sines(__global FPN     *res_g,
     int M = get_global_size(1);
 
     int fi = i*M + j;
-    int pix_idx = fi*3;
 
-    img_g[pix_idx + 0] =127*(sin(res_g[fi]*freqs.f1)+1);
-    img_g[pix_idx + 1] =127*(sin(res_g[fi]*freqs.f2)+1);
-    img_g[pix_idx + 2] =127*(sin(res_g[fi]*freqs.f3)+1);
+    img_g[fi] = (Pixel_t){127*(sin(res_g[fi]*freqs.f1)+1),
+                          127*(sin(res_g[fi]*freqs.f2)+1),
+                          127*(sin(res_g[fi]*freqs.f3)+1)};
 
 }

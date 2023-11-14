@@ -85,3 +85,12 @@ impl Default for ProxType {
 }
 
 unsafe impl OclPrm for ProxType {}
+
+#[repr(C)]
+#[derive(Debug, Default, EguiInspect, PartialEq, Clone, Copy)]
+pub struct ImDims {
+    pub height: i32,
+    pub width: i32,
+}
+
+unsafe impl OclPrm for ImDims {}
