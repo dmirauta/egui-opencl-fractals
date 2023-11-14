@@ -4,7 +4,7 @@ use egui::{DragValue, Image, RichText};
 use egui_extras::syntax_highlighting::{highlight, CodeTheme};
 use egui_inspect::{EguiInspect, InspectNumber};
 use epaint::{vec2, Color32, ColorImage, TextureHandle};
-use image::{io::Reader, EncodableLayout, ImageResult};
+use image::{io::Reader, ColorType, EncodableLayout, ImageResult};
 use ndarray::{Array2, Array3};
 use ocl::{Platform, ProQue};
 use simple_ocl::{try_prog_que_from_source, PairedBuffers2, PairedBuffers3};
@@ -621,6 +621,19 @@ impl FractalViewer {
             self.error = Some(format!("Could not recompile, GPU was busy."));
         }
     }
+
+    fn save_image(&self, fpath: impl AsRef<Path>) -> ImageResult<()> {
+        if let Ok(guard) = self.ocl_helper.try_lock() {
+            image::save_buffer(
+                fpath,
+                guard.rgb.host.as_slice().unwrap(),
+                self.size_selection.1 as u32,
+                self.size_selection.0 as u32,
+                ColorType::Rgb8,
+            )?;
+        };
+        Ok(())
+    }
 }
 
 impl eframe::App for FractalViewer {
@@ -655,6 +668,14 @@ impl eframe::App for FractalViewer {
         egui::SidePanel::right("Controls").show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.label(status_text);
+
+                if ui.button("Save image").clicked() {
+                    if let Some(fpath) = rfd::FileDialog::new().set_directory(".").save_file() {
+                        if let Err(err) = self.save_image(fpath) {
+                            println!("{err}");
+                        };
+                    };
+                };
 
                 ui.collapsing("Kernel settings", |ui| {
                     // TODO: custom function requires recompilation but not buffer changes and size
