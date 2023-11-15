@@ -88,7 +88,6 @@ impl SFParamUI {
 
 struct ItersImage {
     mat_dims: (usize, usize),
-    cimage: ColorImage,
     texture: Option<TextureHandle>,
 }
 
@@ -97,14 +96,15 @@ impl ItersImage {
         Self {
             mat_dims,
             texture: None,
-            cimage: Default::default(),
         }
     }
 
     fn update(&mut self, rgb: &Array3<u8>) {
-        self.cimage =
-            ColorImage::from_rgb([self.mat_dims.1, self.mat_dims.0], rgb.as_slice().unwrap());
-        self.texture = None;
+        if let Some(handle) = &mut self.texture {
+            let cimage =
+                ColorImage::from_rgb([self.mat_dims.1, self.mat_dims.0], rgb.as_slice().unwrap());
+            handle.set(cimage, Default::default());
+        }
     }
 }
 
@@ -115,8 +115,12 @@ impl EguiInspect for ItersImage {
 
     fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
         let handle: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
+            let cimage = ColorImage::from_rgb(
+                [self.mat_dims.1, self.mat_dims.0],
+                vec![0; self.mat_dims.0 * self.mat_dims.1 * 3].as_slice(),
+            );
             ui.ctx()
-                .load_texture("fractal", self.cimage.clone(), Default::default())
+                .load_texture("fractal", cimage.clone(), Default::default())
         });
         ui.add(Image::new(handle).shrink_to_fit());
     }
@@ -375,7 +379,7 @@ impl EguiInspect for SelectedImage {
                         let s = img.shape();
                         let cimage = ColorImage::from_rgb([s[1], s[0]], img.as_slice().unwrap());
                         self.texture =
-                            Some(ui.ctx().load_texture("fractal", cimage, Default::default()));
+                            Some(ui.ctx().load_texture("sampled", cimage, Default::default()));
                     }
                     Err(err) => println!("{err}"),
                 }
