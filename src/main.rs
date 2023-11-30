@@ -9,7 +9,6 @@ use ndarray::{Array2, Array3};
 use ocl::{Platform, ProQue};
 use simple_ocl::{try_prog_que_from_source, PairedBuffers2, PairedBuffers3};
 use std::{
-    error::Error,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
@@ -713,7 +712,7 @@ impl eframe::App for FractalViewer {
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> eframe::Result<()> {
     // Note: Work around to strange segfault issue when building proque in eframe::App
     dbg!(Platform::default());
 
@@ -721,6 +720,5 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Fractal viewer",
         NativeOptions::default(),
         Box::new(|_cc| Box::new(FractalViewer::new())),
-    )?;
-    Ok(())
+    )
 }
