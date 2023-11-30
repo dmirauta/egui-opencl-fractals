@@ -6,14 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-eframe = "0.24.1"
-egui = "0.24.1"
-epaint = "0.24.1"
-egui_extras = "0.24.1"
-ocl = "0.19.5"
+eframe = "0.24"
+egui = "0.24"
+epaint = "0.24"
+egui_extras = "0.24"
+ocl = "0.19"
 egui_inspect = { git = "https://github.com/dmirauta/egui_inspect" }
-egui_inspect_derived = { git = "https://github.com/dmirauta/egui_inspect" }
+# egui_inspect_wrap = { git = "https://github.com/dmirauta/egui_inspect" }
 simple_ocl = { git = "https://github.com/dmirauta/simple_ocl" }
-ndarray = "0.15.6"
-image = "0.24.7"
-rfd = "0.12.1"
+ndarray = "0.15"
+image = "0.24"
+rfd = "0.12"

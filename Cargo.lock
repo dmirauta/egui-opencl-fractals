@@ -1001,7 +1001,6 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_inspect",
- "egui_inspect_derived",
  "epaint",
  "image",
  "ndarray",
@@ -1073,15 +1072,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "egui_inspect_derived"
-version = "0.1.0"
-source = "git+https://github.com/dmirauta/egui_inspect#5bae73615846e919a06b8d7b74133c8417766043"
-dependencies = [
- "egui",
- "egui_inspect",
 ]
 
 [[package]]
