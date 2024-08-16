@@ -1,10 +1,15 @@
 extern crate ocl;
-use eframe::NativeOptions;
-use egui::{DragValue, Image, RichText};
 use egui_extras::syntax_highlighting::{highlight, CodeTheme};
-use egui_inspect::{EguiInspect, InspectNumber};
-use epaint::{vec2, Color32, ColorImage, TextureHandle};
-use image::{io::Reader, ColorType, EncodableLayout, ImageResult};
+use egui_inspect::egui::{
+    self, Color32, ColorImage, DragValue, Image, RichText, TextureHandle, Vec2,
+};
+use egui_inspect::{
+    eframe,
+    logging::{log::error, setup_mixed_logger, FileLogOption},
+    EguiInspect, InspectNumber,
+};
+use frame_view::FrameView;
+use image::{ColorType, EncodableLayout, ImageReader, ImageResult};
 use ndarray::{Array2, Array3};
 use ocl::{Platform, ProQue};
 use simple_ocl::{try_prog_que_from_source, PairedBuffers2, PairedBuffers3};
@@ -14,6 +19,7 @@ use std::{
     thread::JoinHandle,
 };
 
+mod frame_view;
 mod wrapper_types;
 use wrapper_types::{BBox, Complex, Freqs, ImDims, ProxType, SFParam};
 
@@ -85,46 +91,6 @@ impl SFParamUI {
     }
 }
 
-struct ItersImage {
-    mat_dims: (usize, usize),
-    texture: Option<TextureHandle>,
-}
-
-impl ItersImage {
-    fn new(mat_dims: (usize, usize)) -> Self {
-        Self {
-            mat_dims,
-            texture: None,
-        }
-    }
-
-    fn update(&mut self, rgb: &Array3<u8>) {
-        if let Some(handle) = &mut self.texture {
-            let cimage =
-                ColorImage::from_rgb([self.mat_dims.1, self.mat_dims.0], rgb.as_slice().unwrap());
-            handle.set(cimage, Default::default());
-        }
-    }
-}
-
-impl EguiInspect for ItersImage {
-    fn inspect(&self, _label: &str, _ui: &mut egui::Ui) {
-        todo!()
-    }
-
-    fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
-        let handle: &egui::TextureHandle = self.texture.get_or_insert_with(|| {
-            let cimage = ColorImage::from_rgb(
-                [self.mat_dims.1, self.mat_dims.0],
-                vec![0; self.mat_dims.0 * self.mat_dims.1 * 3].as_slice(),
-            );
-            ui.ctx()
-                .load_texture("fractal", cimage.clone(), Default::default())
-        });
-        ui.add(Image::new(handle).shrink_to_fit());
-    }
-}
-
 // ocl source baked into binary at build time
 static OCL_STRUCTS: &str = include_str!("./ocl/mandelstructs.h");
 static OCL_FUNCS: &str = include_str!("./ocl/mandelutils.c");
@@ -140,7 +106,7 @@ fn insert_custom_func(custom_func: String) -> String {
     format!("{before_func}{custom_func}{after_func}")
 }
 
-struct OCLHelper {
+struct FractalCompute {
     pro_que: ProQue,
     field_1: PairedBuffers2<f64>,
     field_2: PairedBuffers2<f64>,
@@ -150,8 +116,8 @@ struct OCLHelper {
     rgb: PairedBuffers3<u8>,
 }
 
-impl OCLHelper {
-    fn new(im_mat_dims: (usize, usize), custom_iter_func: Option<String>) -> ocl::Result<Self> {
+impl FractalCompute {
+    fn new(im_dims: (usize, usize), custom_iter_func: Option<String>) -> ocl::Result<Self> {
         let ocl_funcs_custom = match custom_iter_func {
             Some(cf) => insert_custom_func(cf),
             None => OCL_FUNCS.to_string(),
@@ -159,12 +125,12 @@ impl OCLHelper {
         let full_source = format!("{OCL_STRUCTS}{ocl_funcs_custom}{OCL_KERNELS}");
         let mut pro_que =
             try_prog_que_from_source(full_source, "mandel", vec!["-DEXTERNAL_CONCAT".to_string()])?;
-        let field_1 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_mat_dims), &mut pro_que);
-        let field_2 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_mat_dims), &mut pro_que);
-        let field_3 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_mat_dims), &mut pro_que);
-        let (n, m) = im_mat_dims;
+        let field_1 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_dims), &mut pro_que);
+        let field_2 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_dims), &mut pro_que);
+        let field_3 = PairedBuffers2::create_from(Array2::<f64>::zeros(im_dims), &mut pro_que);
+        let (n, m) = im_dims;
         let rgb = PairedBuffers3::create_from(Array3::<u8>::zeros((n, m, 3)), &mut pro_que);
-        Ok(OCLHelper {
+        Ok(FractalCompute {
             pro_que,
             field_1,
             field_2,
@@ -183,7 +149,7 @@ impl OCLHelper {
                 self.sampled_rgb = Some(pb);
                 self.sampled_path = Some(ip);
             }
-            Err(err) => println!("{err}"),
+            Err(err) => error!("{err}"),
         }
     }
 
@@ -337,7 +303,7 @@ enum FractalFieldType {
 }
 
 fn load_decoded(fpath: impl AsRef<Path>) -> ImageResult<Array3<u8>> {
-    let img = Reader::open(fpath)?
+    let img = ImageReader::open(fpath)?
         .with_guessed_format()?
         .decode()?
         .into_rgb8();
@@ -380,7 +346,7 @@ impl EguiInspect for SelectedImage {
                         self.texture =
                             Some(ui.ctx().load_texture("sampled", cimage, Default::default()));
                     }
-                    Err(err) => println!("{err}"),
+                    Err(err) => error!("{err}"),
                 }
             }
         }
@@ -388,7 +354,7 @@ impl EguiInspect for SelectedImage {
         if let Some(handle) = &self.texture {
             let size = handle.size();
             let aspect = (size[0] as f32) / (size[1] as f32);
-            ui.add(Image::new(handle).fit_to_exact_size(vec2(300.0, aspect * 300.0)));
+            ui.add(Image::new(handle).fit_to_exact_size(Vec2::new(300.0, aspect * 300.0)));
         }
     }
 }
@@ -476,7 +442,7 @@ impl EguiInspect for FunctionEditor {
                     .desired_rows(10)
                     .lock_focus(true)
                     .desired_width(f32::INFINITY)
-                    .min_size(vec2(300.0, 200.0))
+                    .min_size(Vec2::new(300.0, 200.0))
                     .layouter(&mut layouter),
             );
         });
@@ -491,8 +457,8 @@ struct FractalViewer {
     editor: FunctionEditor,
     size_selection: (usize, usize),
     error: Option<String>,
-    iters_image: ItersImage,
-    ocl_helper: Arc<Mutex<OCLHelper>>,
+    iters_image: FrameView,
+    ocl_helper: Arc<Mutex<FractalCompute>>,
     join_handle: Option<JoinHandle<ThreadResult>>,
 }
 
@@ -505,9 +471,9 @@ impl FractalViewer {
 
         Self {
             editor: Default::default(),
-            iters_image: ItersImage::new(INITIAL_IM_MAT_DIMS),
+            iters_image: FrameView::new(INITIAL_IM_MAT_DIMS),
             ocl_helper: Arc::new(Mutex::new(
-                OCLHelper::new(INITIAL_IM_MAT_DIMS, None).unwrap(),
+                FractalCompute::new(INITIAL_IM_MAT_DIMS, None).unwrap(),
             )),
             join_handle: None,
             fp: Default::default(),
@@ -519,7 +485,7 @@ impl FractalViewer {
 
     fn handle_field(
         fi: usize,
-        helper: &mut OCLHelper,
+        helper: &mut FractalCompute,
         field_type: FractalFieldType,
         sfparam_c: SFParam,
     ) -> ocl::Result<()> {
@@ -543,7 +509,7 @@ impl FractalViewer {
     fn run_kernel_in_background(&mut self) {
         let helper_arc = self.ocl_helper.clone();
         let frac_param = self.fp.clone();
-        let dims = self.iters_image.mat_dims;
+        let dims = self.iters_image.dims;
 
         self.join_handle = Some(std::thread::spawn(move || {
             let FractalParams { sfparam, vis_type } = frac_param;
@@ -604,19 +570,19 @@ impl FractalViewer {
         match handle.join().expect("thread join error") {
             Ok(_) => match self.ocl_helper.try_lock() {
                 Ok(guard) => self.iters_image.update(&guard.rgb.host),
-                Err(err) => println!("could not aquire mutex in update: {err}"),
+                Err(err) => error!("could not aquire mutex in update: {err}"),
             },
-            Err(err) => println!("Error on other thread: {}", err),
+            Err(err) => error!("Error on other thread: {}", err),
         }
     }
 
     fn try_recompile(&mut self) {
         if self.join_handle.is_none() {
             if let Ok(mut guard) = self.ocl_helper.try_lock() {
-                match OCLHelper::new(self.size_selection, Some(self.editor.code.clone())) {
+                match FractalCompute::new(self.size_selection, Some(self.editor.code.clone())) {
                     Ok(new_helper) => {
                         *guard = new_helper;
-                        self.iters_image = ItersImage::new(self.size_selection);
+                        self.iters_image = FrameView::new(self.size_selection);
                         self.old_fp.sfparam.max_iter = 0; // trigger recompute
                         self.error = None;
                     }
@@ -677,7 +643,7 @@ impl eframe::App for FractalViewer {
             if ui.button("Save image").clicked() {
                 if let Some(fpath) = rfd::FileDialog::new().set_directory(".").save_file() {
                     if let Err(err) = self.save_image(fpath) {
-                        println!("{err}");
+                        error!("{err}");
                     };
                 };
             };
@@ -713,12 +679,17 @@ impl eframe::App for FractalViewer {
 }
 
 fn main() -> eframe::Result<()> {
-    // Note: Work around to strange segfault issue when building proque in eframe::App
+    // NOTE: Work around to strange segfault issue when building proque in eframe::App
     dbg!(Platform::default());
+
+    // TODO: Include gui log view?
+    setup_mixed_logger(FileLogOption::DefaultTempDir {
+        log_name: "egui_ocl_fractals".into(),
+    });
 
     eframe::run_native(
         "Fractal viewer",
-        NativeOptions::default(),
-        Box::new(|_cc| Box::new(FractalViewer::new())),
+        Default::default(),
+        Box::new(|_cc| Ok(Box::new(FractalViewer::new()))),
     )
 }
