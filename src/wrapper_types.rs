@@ -1,4 +1,4 @@
-use egui_inspect::{EguiInspect, InspectNumber};
+use egui_inspect::EguiInspect;
 use ocl::OclPrm;
 
 #[repr(C)]
@@ -19,9 +19,9 @@ unsafe impl OclPrm for BBox {}
 #[repr(C)]
 #[derive(Debug, EguiInspect, PartialEq, Clone, Copy)]
 pub struct Complex {
-    #[inspect(min=-2.0, max=2.0)]
+    #[inspect(slider, min=-2.0, max=2.0)]
     pub re: f64,
-    #[inspect(min=-2.0, max=2.0)]
+    #[inspect(slider, min=-2.0, max=2.0)]
     pub im: f64,
 }
 

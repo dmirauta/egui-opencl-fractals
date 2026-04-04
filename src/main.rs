@@ -1,12 +1,12 @@
 extern crate ocl;
 use egui_extras::syntax_highlighting::{highlight, CodeTheme};
 use egui_inspect::egui::{
-    self, Color32, ColorImage, DragValue, Image, RichText, TextureHandle, Vec2,
+    self, Color32, ColorImage, DragValue, Image, RichText, TextBuffer, TextureHandle, Vec2,
 };
 use egui_inspect::{
     eframe,
     logging::{log::error, setup_mixed_logger, FileLogOption},
-    EguiInspect, InspectNumber,
+    EguiInspect,
 };
 use frame_view::FrameView;
 use image::{ColorType, EncodableLayout, ImageReader, ImageResult};
@@ -36,7 +36,7 @@ impl FractalMode {
     fn get_c(&self) -> Complex {
         match self {
             FractalMode::Mandel => Complex::default(),
-            FractalMode::Julia { c } => c.clone(),
+            FractalMode::Julia { c } => *c,
         }
     }
 }
@@ -400,6 +400,7 @@ struct FractalParams {
 /// in syntect
 struct FunctionEditor {
     code: String,
+    style: egui::Style,
     theme: CodeTheme,
 }
 
@@ -417,21 +418,19 @@ inline Complex_t f(Complex_t z, Complex_t c) {
   return complex_add(complex_pow(z, 2), c);
 }"
             .to_string(),
+            style: Default::default(),
             theme: Default::default(),
         }
     }
 }
 
 impl EguiInspect for FunctionEditor {
-    fn inspect(&self, _label: &str, _ui: &mut egui::Ui) {
-        todo!()
-    }
-
     fn inspect_mut(&mut self, _label: &str, ui: &mut egui::Ui) {
-        let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
-            let mut layout_job = highlight(ui.ctx(), &self.theme, string, "c");
+        let mut layouter = |ui: &egui::Ui, string: &dyn TextBuffer, wrap_width: f32| {
+            let mut layout_job =
+                highlight(ui.ctx(), &self.style, &self.theme, string.as_str(), "c");
             layout_job.wrap.max_width = wrap_width;
-            ui.fonts(|f| f.layout_job(layout_job))
+            ui.fonts_mut(|f| f.layout_job(layout_job))
         };
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -520,10 +519,10 @@ impl FractalViewer {
                     match vis_type {
                         FractalVisualisationType::SingleFieldCmaped {
                             field_type,
-                            cmap_freqs: freqs,
+                            cmap_freqs,
                         } => {
                             Self::handle_field(1, &mut guard, field_type, sfparam_c)?;
-                            guard.run_map_sines(freqs)?;
+                            guard.run_map_sines(cmap_freqs)?;
                         }
                         FractalVisualisationType::DualFieldImageMap {
                             u_field_type,
@@ -590,7 +589,7 @@ impl FractalViewer {
                 }
             }
         } else {
-            self.error = Some(format!("Could not recompile, GPU was busy."));
+            self.error = Some("Could not recompile, GPU was busy.".to_string());
         }
     }
 
@@ -637,7 +636,7 @@ impl eframe::App for FractalViewer {
             self.iters_image.inspect_mut("", ui);
         });
 
-        egui::SidePanel::right("Controls").show(ctx, |ui| {
+        egui::SidePanel::left("Controls").show(ctx, |ui| {
             ui.label(status_text);
 
             if ui.button("Save image").clicked() {

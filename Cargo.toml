@@ -6,10 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-egui_inspect = { git = "https://github.com/dmirauta/egui_inspect", branch = "0_28", features = [
+egui_inspect = { git = "https://github.com/dmirauta/egui_inspect", branch = "0_33", features = [
   "logging",
 ] }
-egui_extras = "0.28"
+egui_extras = "0.33"
 ocl = "0.19"
 simple_ocl = { git = "https://github.com/dmirauta/simple_ocl" }
 ndarray = "0.16"
